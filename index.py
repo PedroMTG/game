@@ -39,6 +39,20 @@ building_images["Predio"] = pygame.transform.scale(
     pygame.image.load("assets/predio.png").convert_alpha(),
     (CELL_SIZE, CELL_SIZE)
 )
+building_images["Lojinha"] =  pygame.transform.scale(
+    pygame.image.load("assets/loja-game.png").convert_alpha(),
+    (CELL_SIZE, CELL_SIZE)
+)
+
+building_images["Shopping"] =  pygame.transform.scale(
+    pygame.image.load("assets/shopping-game.png").convert_alpha(),
+    (CELL_SIZE, CELL_SIZE)
+)
+
+building_images["Factory"] =  pygame.transform.scale(
+    pygame.image.load("assets/factory-game.png").convert_alpha(),
+    (CELL_SIZE, CELL_SIZE)
+)
 
 # ----- MAPA -----
 MAP_WIDTH = GRID_SIZE * CELL_SIZE
