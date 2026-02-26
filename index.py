@@ -205,6 +205,10 @@ def draw_trees():
         color = (255,165,0) if collecting_tree == (tx,ty) else (34,139,34)
         pygame.draw.rect(screen, color, rect)
 
+        # for i in range(5):
+        #     img = pygame.image.load(f"assets/arvore{i+1}-game.png").convert_alpha()
+        #     tree_imgs.append(img)
+                
 def draw_preview():
     if not preview_active or not selected_building:
         return
