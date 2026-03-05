@@ -1,0 +1,9 @@
+cd ~/Desktop/game
+python -m PyInstaller --name="cityBuilder_console" --onefile --add-data "assets;assets" --add-data "sound;sound" index.py
+cp -r assets dist/
+cp -r sound dist/
+cd dist
+./cityBuilder_console.exe
+
+cd ~/Desktop/game
+python -m PyInstaller --name="CityBuilder" --onefile --add-data "assets;assets" --add-data "sound;sound" index.py
