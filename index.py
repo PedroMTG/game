@@ -9,17 +9,17 @@ pygame.init()
 pygame.mixer.init()
 
 # ----- CONFIG -----
-GRID_SIZE = 100
+GRID_SIZE = 150
 BASE_CELL_SIZE = 60
-MIN_ZOOM = 0.3
-MAX_ZOOM = 2.0
+MIN_ZOOM = 0.2
+MAX_ZOOM = 2
 ZOOM_SPEED = 0.1
 
 # ===== Configuração do mapa orgânico =====
 MAP_RADIUS = GRID_SIZE // 2
 CENTER_X = GRID_SIZE // 2
 CENTER_Y = GRID_SIZE // 2
-NOISE_STRENGTH = 1
+NOISE_STRENGTH = 0.5
 WATER_COLOR = (64, 164, 223)
 SAND_COLOR = (238, 214, 175)
 GRASS_COLOR = (124, 238, 124)  # Verde claro
@@ -57,14 +57,39 @@ COLORS = {
     'construction': (241, 196, 15, 200),  # Amarelo para construção
 }
 
-# ----- SONS -----
+# Adicione esta função na seção de configurações, depois das cores
+def get_water_color(distance_from_center, max_distance):
+    # Cores da água (RGB)
+    SHALLOW_WATER = (64, 164, 223)      # Azul claro (perto da costa)
+    DEEP_WATER = (20, 40, 80)           # Azul escuro (longe da costa)
+    
+    # Calcula o fator de profundidade (0 = costa, 1 = mais longe)
+    depth_factor = min(1.0, (distance_from_center - (MAP_RADIUS - 5)) / 10)
+    depth_factor = max(0, min(1, depth_factor))
+    
+    # Interpola entre as cores
+    r = int(SHALLOW_WATER[0] + (DEEP_WATER[0] - SHALLOW_WATER[0]) * depth_factor)
+    g = int(SHALLOW_WATER[1] + (DEEP_WATER[1] - SHALLOW_WATER[1]) * depth_factor)
+    b = int(SHALLOW_WATER[2] + (DEEP_WATER[2] - SHALLOW_WATER[2]) * depth_factor)
+    
+    return (r, g, b)
+
+# ----- SONS ----- (substitua a seção existente)
+pygame.mixer.set_num_channels(32)  # Aumenta o número de canais disponíveis
+
 build_sound = pygame.mixer.Sound("sound/build.wav")
 break_sound = pygame.mixer.Sound("sound/breaking.wav")
-upgrade_sound = pygame.mixer.Sound("sound/build.wav")
+button_sound = pygame.mixer.Sound("sound/button.wav")
+build_finish_sound = pygame.mixer.Sound("sound/build-finish.wav")
+cutting_sound = pygame.mixer.Sound("sound/cutting.wav") 
+falling_tree_sound = pygame.mixer.Sound("sound/falling-tree.wav") 
 
 build_sound.set_volume(0.5)
 break_sound.set_volume(0.5)
-upgrade_sound.set_volume(0.5)
+button_sound.set_volume(1.0)
+build_finish_sound.set_volume(1.0)
+cutting_sound.set_volume(3)
+falling_tree_sound.set_volume(0.4)
 
 # ----- IMAGENS DOS PRÉDIOS (tamanho original) -----
 building_images_original = {}
@@ -287,8 +312,8 @@ def get_visible_range():
     return start_x, start_y, end_x, end_y
 
 # ----- ECONOMIA -----
-money = 100033
-wood = 20033
+money = 10000033
+wood = 2003300
 
 # ===== SISTEMA DE POPULAÇÃO =====
 class PopulationSystem:
@@ -364,7 +389,7 @@ class UpgradeSystem:
             global money
             money -= self.simultaneous_cuts_cost[self.simultaneous_cuts_level]
             self.simultaneous_cuts_level += 1
-            upgrade_sound.play()
+            button_sound.play()  # Mudado de upgrade_sound para button_sound
             return True
         return False
     
@@ -373,7 +398,7 @@ class UpgradeSystem:
             global money
             money -= self.cut_time_cost[self.cut_time_level]
             self.cut_time_level += 1
-            upgrade_sound.play()
+            button_sound.play()  # Mudado de upgrade_sound para button_sound
             return True
         return False
     
@@ -382,15 +407,57 @@ class UpgradeSystem:
             global money
             money -= self.construction_time_cost[self.construction_time_level]
             self.construction_time_level += 1
-            upgrade_sound.play()
+            button_sound.play()  # Mudado de upgrade_sound para button_sound
             return True
         return False
 
 upgrades = UpgradeSystem()
 
+class FlyingIcon:
+    def __init__(self, start_x, start_y, end_x, end_y, image, duration=1000):
+        self.start_x = start_x
+        self.start_y = start_y
+        self.end_x = end_x
+        self.end_y = end_y
+        self.image = image
+        self.duration = duration  # duração em milissegundos
+        self.start_time = pygame.time.get_ticks()
+        
+        # Calcula a distância total para usar na curva de movimento
+        self.total_distance = math.sqrt((end_x - start_x)**2 + (end_y - start_y)**2)
+        
+    def update(self, current_time):
+        # Calcula o progresso da animação (0 a 1)
+        progress = (current_time - self.start_time) / self.duration
+        progress = min(1.0, max(0.0, progress))
+        
+        # Usa uma curva de easing para movimento mais suave (quadrático)
+        # progress = progress  # linear
+        # progress = progress * progress  # acelerando
+        progress = 1 - (1 - progress) * (1 - progress)  # desacelerando (mais natural)
+        
+        # Calcula posição atual com uma leve curva para efeito mais interessante
+        current_x = self.start_x + (self.end_x - self.start_x) * progress
+        current_y = self.start_y + (self.end_y - self.start_y) * progress
+        
+        # Adiciona um pequeno arco na trajetória (opcional)
+        arc_height = 50 * math.sin(progress * math.pi)  # arco de 50 pixels
+        current_y -= arc_height
+        
+        # Calcula a escala (começa grande e diminui)
+        scale = 1.0 + 0.5 * (1 - progress)  # começa 1.5x, termina 1.0x
+        
+        return current_x, current_y, scale, progress
+    
+    def is_finished(self, current_time):
+        return current_time - self.start_time >= self.duration
+
+# Lista para armazenar ícones voadores
+flying_icons = []
+
 # ----- ÁRVORES -----
 trees = []
-for _ in range(500):
+for _ in range(1000):
     attempts = 0
     while attempts < 100:
         x = random.randint(0, GRID_SIZE-1)
@@ -406,6 +473,7 @@ for _ in range(500):
 # ----- SISTEMA DE COLETA -----
 collecting_trees = []
 collect_start_times = {}
+cutting_sounds_playing = {}  # Dicionário para controlar sons de corte por árvore
 COLLECT_COST = 10
 
 # ===== SISTEMA DE CONSTRUÇÃO =====
@@ -483,21 +551,32 @@ def can_place_building(name, gx, gy):
     if gx + width > GRID_SIZE or gy + height > GRID_SIZE:
         return False
 
+    # Verifica se o terreno é válido (não é água ou areia)
     for y in range(gy, gy+height):
         for x in range(gx, gx+width):
             if map_generator.is_water(x, y) or map_generator.is_sand(x, y):
                 return False
 
+    # Verifica se alguma célula já está ocupada por uma construção completa
     for y in range(gy, gy+height):
         for x in range(gx, gx+width):
             if grid[y][x] is not None:
                 return False
-            for building in buildings_in_progress:
-                if building["pos"] == (x, y):
-                    return False
+    
+    # Verifica se alguma célula já está ocupada por uma construção em andamento
+    for construction in buildings_in_progress:
+        for cell_x, cell_y in construction["cells"]:
+            # Verifica se a célula está dentro da área da nova construção
+            if (gx <= cell_x < gx + width) and (gy <= cell_y < gy + height):
+                return False
+    
+    # Verifica se há árvores no local
+    for y in range(gy, gy+height):
+        for x in range(gx, gx+width):
             for tree in trees:
                 if tree["pos"] == (x, y):
                     return False
+    
     return True
 
 def start_construction(name, gx, gy):
@@ -542,6 +621,8 @@ def complete_construction(construction):
     population_system.calculate_population(grid)
     buildings_in_progress.remove(construction)
     del building_start_times[(gx, gy)]
+    
+    build_finish_sound.play()  # NOVO: som de construção concluída
 
 def demolish_building(gx, gy):
     if grid[gy][gx] is None:
@@ -560,14 +641,26 @@ def draw_grid():
     cell_size_scaled = BASE_CELL_SIZE * zoom
     start_x, start_y, end_x, end_y = get_visible_range()
     
-    # 1. PRIMEIRO: Desenha o fundo (água, areia, grama)
+    # 1. PRIMEIRO: Desenha o fundo (água com degradê, areia, grama)
     for x in range(start_x, end_x):
         for y in range(start_y, end_y):
             screen_x, screen_y = world_to_screen(x * BASE_CELL_SIZE, y * BASE_CELL_SIZE)
-            rect = pygame.Rect(screen_x, screen_y, cell_size_scaled, cell_size_scaled)
+            
+            # Arredonda as coordenadas para evitar gaps
+            screen_x = round(screen_x)
+            screen_y = round(screen_y)
+            cell_width = round(cell_size_scaled) + 1  # +1 para eliminar gaps
+            cell_height = round(cell_size_scaled) + 1  # +1 para eliminar gaps
+            
+            rect = pygame.Rect(screen_x, screen_y, cell_width, cell_height)
             
             if map_generator.is_water(x, y):
-                pygame.draw.rect(screen, WATER_COLOR, rect)
+                # Calcula distância do centro para efeito degradê
+                dx = x - CENTER_X
+                dy = y - CENTER_Y
+                distance = math.sqrt(dx*dx + dy*dy)
+                water_color = get_water_color(distance, MAP_RADIUS)
+                pygame.draw.rect(screen, water_color, rect)
             elif map_generator.is_sand(x, y):
                 pygame.draw.rect(screen, SAND_COLOR, rect)
             elif grid[y][x] is None:
@@ -590,15 +683,46 @@ def draw_grid():
             if cell_x < start_x or cell_x >= end_x or cell_y < start_y or cell_y >= end_y:
                 continue
             cell_screen_x, cell_screen_y = world_to_screen(cell_x * BASE_CELL_SIZE, cell_y * BASE_CELL_SIZE)
-            cell_rect = pygame.Rect(cell_screen_x, cell_screen_y, cell_size_scaled, cell_size_scaled)
-            s = pygame.Surface((cell_size_scaled, cell_size_scaled), pygame.SRCALPHA)
-            s.fill((241, 196, 15, 100))  # Amarelo transparente
+            cell_screen_x = round(cell_screen_x)
+            cell_screen_y = round(cell_screen_y)
+            cell_width = round(cell_size_scaled) + 1
+            cell_height = round(cell_size_scaled) + 1
+            
+            cell_rect = pygame.Rect(cell_screen_x, cell_screen_y, cell_width, cell_height)
+            s = pygame.Surface((cell_width, cell_height), pygame.SRCALPHA)
+            s.fill((241, 196, 15, 100))
             screen.blit(s, cell_rect)
     
-    # 3. TERCEIRO: Desenha as árvores (para ficarem atrás das construções completas)
+    # 3. TERCEIRO: Desenha as árvores
     draw_trees()
     
-    # 4. QUARTO: Desenha construções completas
+    # 4. QUARTO: Desenha as LINHAS DO GRID - AGORA ANTES DOS PRÉDIOS
+    line_width = max(1, int(zoom * 0.8))  # linhas um pouco mais finas também ajudam
+    line_color = (70, 70, 70)  # Cinza escuro suave
+    
+    # Desenha linhas verticais
+    for x in range(start_x, end_x + 1):
+        screen_x, _ = world_to_screen(x * BASE_CELL_SIZE, 0)
+        screen_x = int(round(screen_x))
+        
+        if 0 <= screen_x < SCREEN_WIDTH:
+            pygame.draw.line(screen, line_color, 
+                           (screen_x, 0), 
+                           (screen_x, SCREEN_HEIGHT), 
+                           line_width)
+    
+    # Desenha linhas horizontais
+    for y in range(start_y, end_y + 1):
+        _, screen_y = world_to_screen(0, y * BASE_CELL_SIZE)
+        screen_y = int(round(screen_y))
+        
+        if 0 <= screen_y < SCREEN_HEIGHT:
+            pygame.draw.line(screen, line_color, 
+                           (0, screen_y), 
+                           (SCREEN_WIDTH, screen_y), 
+                           line_width)
+    
+    # 5. QUINTO: Desenha construções completas (AGORA POR CIMA DO GRID)
     for x in range(start_x, end_x):
         for y in range(start_y, end_y):
             if map_generator.is_water(x, y) or map_generator.is_sand(x, y):
@@ -617,16 +741,18 @@ def draw_grid():
                 if is_origin:
                     width, height = buildings[building_name]["size"]
                     img_screen_x, img_screen_y = world_to_screen(x * BASE_CELL_SIZE, y * BASE_CELL_SIZE)
-                    img_width = width * BASE_CELL_SIZE * zoom
-                    img_height = height * BASE_CELL_SIZE * zoom
+                    img_screen_x = round(img_screen_x)
+                    img_screen_y = round(img_screen_y)
+                    img_width = round(width * BASE_CELL_SIZE * zoom) + 1
+                    img_height = round(height * BASE_CELL_SIZE * zoom) + 1
                     
                     img = pygame.transform.scale(
                         building_images_original[building_name],
-                        (int(img_width), int(img_height))
+                        (img_width, img_height)
                     )
                     screen.blit(img, (img_screen_x, img_screen_y))
     
-    # 5. QUINTO: Desenha as barras de progresso POR CIMA das construções completas (VERSÃO BONITA)
+    # 6. SEXTO: Desenha as barras de progresso (por cima dos prédios)
     current_time = pygame.time.get_ticks()
     for construction in buildings_in_progress:
         gx, gy = construction["pos"]
@@ -638,84 +764,82 @@ def draw_grid():
         progress = min(1.0, max(0.0, progress))
         
         screen_x, screen_y = world_to_screen(gx * BASE_CELL_SIZE, gy * BASE_CELL_SIZE)
+        screen_x = round(screen_x)
+        screen_y = round(screen_y)
         
-        # Dimensões da barra
         bar_width_total = cell_size_scaled * construction["width"]
         bar_height = 8
         bar_y = screen_y - 15
         
-        # 1. Fundo da barra (cinza escuro)
         bar_bg_rect = pygame.Rect(screen_x, bar_y, bar_width_total, bar_height)
         pygame.draw.rect(screen, (60, 60, 60), bar_bg_rect, border_radius=4)
         
-        # 2. Barra de progresso com gradiente
         bar_fg_width = bar_width_total * progress
         if bar_fg_width > 0:
-            # Cria superfície para o gradiente
             bar_surf = pygame.Surface((bar_fg_width, bar_height), pygame.SRCALPHA)
-            
-            # Gradiente do amarelo claro ao laranja
             for i in range(int(bar_fg_width)):
-                # Calcula cor do gradiente
                 t = i / bar_fg_width
-                r = int(255 - t * 50)  # 255 → 205
-                g = int(215 - t * 30)  # 215 → 185
-                b = int(0 + t * 20)     # 0 → 20
+                r = int(255 - t * 50)
+                g = int(215 - t * 30)
+                b = int(0 + t * 20)
                 alpha = 255
-                
-                # Desenha cada pixel com a cor do gradiente
                 pygame.draw.line(bar_surf, (r, g, b, alpha), (i, 0), (i, bar_height))
-            
-            # Aplica a barra na tela
             screen.blit(bar_surf, (screen_x, bar_y))
         
-        # 3. Borda brilhante
         border_rect = pygame.Rect(screen_x, bar_y, bar_width_total, bar_height)
         pygame.draw.rect(screen, (255, 255, 200, 100), border_rect, width=1, border_radius=4)
         
-        # 4. Efeito de brilho no centro
         if progress > 0.1:
             glow_width = max(2, int(bar_fg_width * 0.3))
             glow_x = screen_x + bar_fg_width - glow_width
             glow_rect = pygame.Rect(glow_x, bar_y, glow_width, bar_height)
             glow_surf = pygame.Surface((glow_width, bar_height), pygame.SRCALPHA)
-            
-            # Gradiente do centro para as bordas
             for i in range(glow_width):
                 alpha = int(100 * (1 - i / glow_width))
                 pygame.draw.line(glow_surf, (255, 255, 255, alpha), (i, 0), (i, bar_height))
-            
             screen.blit(glow_surf, (glow_x, bar_y))
         
-        # 5. Texto de porcentagem (opcional)
-        if bar_fg_width > 30:  # Só mostra se tiver espaço
+        if bar_fg_width > 30:
             percent_text = font_small.render(f"{int(progress * 100)}%", True, (255, 255, 255))
             text_rect = percent_text.get_rect(center=(screen_x + bar_fg_width/2, bar_y - 10))
-            
-            # Fundo preto semi-transparente para o texto
             text_bg_rect = text_rect.inflate(10, 4)
             pygame.draw.rect(screen, (0, 0, 0, 150), text_bg_rect, border_radius=3)
             screen.blit(percent_text, text_rect)
-    
-    # 6. SEXTO: Linhas do grid (opcional)
-    for x in range(start_x, end_x):
-        for y in range(start_y, end_y):
-            if map_generator.is_water(x, y) or map_generator.is_sand(x, y):
-                continue
-                
-            screen_x, screen_y = world_to_screen(x * BASE_CELL_SIZE, y * BASE_CELL_SIZE)
-            rect = pygame.Rect(screen_x, screen_y, cell_size_scaled, cell_size_scaled)
-
-            draw_this_cell_line = True
-            if grid[y][x] is not None:
-                building_data = grid[y][x]
-                building_name = building_data["name"]
-                width, height = buildings[building_name]["size"]
-                if width > 1 or height > 1:
-                    draw_this_cell_line = False
             
-            if draw_this_cell_line:
-                pygame.draw.rect(screen, (0,0,0), rect, 1)
+# Adicione esta função nova na seção de funções de desenho
+def draw_popup(screen, message, duration=2000):
+    """Desenha um popup no centro da tela por um determinado tempo"""
+    popup_start_time = pygame.time.get_ticks()
+    showing_popup = True
+    
+    # Cria uma superfície para o popup
+    popup_width = 400
+    popup_height = 100
+    popup_surf = pygame.Surface((popup_width, popup_height), pygame.SRCALPHA)
+    
+    # Desenha o fundo do popup
+    pygame.draw.rect(popup_surf, (44, 62, 80, 230), 
+                    (0, 0, popup_width, popup_height), border_radius=15)
+    pygame.draw.rect(popup_surf, COLORS['gold'], 
+                    (0, 0, popup_width, popup_height), width=3, border_radius=15)
+    
+    # Desenha o texto
+    text = font_medium.render(message, True, (255, 255, 255))
+    text_rect = text.get_rect(center=(popup_width//2, popup_height//2))
+    popup_surf.blit(text, text_rect)
+    
+    # Desenha um ícone de aviso
+    warning_icon = font_large.render("⚠️", True, COLORS['gold'])
+    icon_rect = warning_icon.get_rect(center=(popup_width//2, popup_height//2 - 20))
+    popup_surf.blit(warning_icon, icon_rect)
+    
+    # Posiciona o popup no centro da tela
+    popup_rect = popup_surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2))
+    
+    # Desenha o popup na tela
+    screen.blit(popup_surf, popup_rect)
+    
+    return popup_start_time + duration > pygame.time.get_ticks()
 
 def draw_trees():
     cell_size_scaled = BASE_CELL_SIZE * zoom
@@ -731,30 +855,78 @@ def draw_trees():
             
         tree_type = tree["type"]
         screen_x, screen_y = world_to_screen(tx * BASE_CELL_SIZE, ty * BASE_CELL_SIZE)
-        rect = pygame.Rect(screen_x, screen_y, cell_size_scaled, cell_size_scaled)
+        
+        # Arredonda as coordenadas para evitar blur
+        screen_x = round(screen_x)
+        screen_y = round(screen_y)
+        cell_width = round(cell_size_scaled)
+        cell_height = round(cell_size_scaled)
+        
+        rect = pygame.Rect(screen_x, screen_y, cell_width, cell_height)
         
         tree_img = pygame.transform.scale(
             tree_images_original[tree_type],
-            (int(cell_size_scaled), int(cell_size_scaled))
+            (cell_width, cell_height)
         )
         
         is_collecting = False
+        progress = 0
         for collecting_tree in collecting_trees:
             if collecting_tree["pos"] == (tx, ty):
                 is_collecting = True
                 start_time = collect_start_times[(tx, ty)]
                 progress = (current_time - start_time) / upgrades.get_current_cut_time()
+                progress = min(1.0, max(0.0, progress))
                 break
         
         if is_collecting:
-            s = pygame.Surface((cell_size_scaled, cell_size_scaled), pygame.SRCALPHA)
-            s.fill((255,255,0,100))
+            # Primeiro desenha a árvore com um overlay escuro
+            dark_overlay = pygame.Surface((cell_width, cell_height), pygame.SRCALPHA)
+            dark_overlay.fill((0, 0, 0, 100))
             screen.blit(tree_img, rect.topleft)
-            screen.blit(s, rect.topleft)
+            screen.blit(dark_overlay, rect.topleft)
             
-            bar_width = cell_size_scaled * min(progress, 1.0)
-            bar_rect = pygame.Rect(rect.x, rect.y + cell_size_scaled - 5, bar_width, 3)
-            pygame.draw.rect(screen, (0,255,0), bar_rect)
+            # Desenha a barra de progresso NO TOPO da árvore (mais visível)
+            bar_width = cell_width
+            bar_height = max(4, round(cell_height * 0.1))  # 10% da altura da célula
+            bar_y = screen_y + 5  # Pequeno espaçamento do topo
+            
+            # Fundo da barra
+            bar_bg_rect = pygame.Rect(screen_x, bar_y, bar_width, bar_height)
+            pygame.draw.rect(screen, (40, 40, 40), bar_bg_rect, border_radius=bar_height//2)
+            
+            # Barra de progresso com gradiente
+            bar_fg_width = round(bar_width * progress)
+            if bar_fg_width > 0:
+                # Cria gradiente do amarelo ao verde
+                bar_surf = pygame.Surface((bar_fg_width, bar_height))
+                for i in range(bar_fg_width):
+                    t = i / bar_fg_width
+                    # Transição de amarelo para verde
+                    r = int(255 - t * 155)  # 255 → 100
+                    g = int(215 + t * 40)   # 215 → 255
+                    b = int(0)
+                    pygame.draw.line(bar_surf, (r, g, b), (i, 0), (i, bar_height))
+                
+                bar_fg_rect = pygame.Rect(screen_x, bar_y, bar_fg_width, bar_height)
+                screen.blit(bar_surf, bar_fg_rect)
+            
+            # Borda branca sutil
+            pygame.draw.rect(screen, (255, 255, 255, 100), 
+                           (screen_x, bar_y, bar_width, bar_height), 
+                           width=1, border_radius=bar_height//2)
+            
+            # Texto de porcentagem (opcional, só aparece se a barra for grande o suficiente)
+            if bar_width > 40 and progress > 0.05:
+                percent_text = font_small.render(f"{int(progress * 100)}%", True, (255, 255, 255))
+                text_rect = percent_text.get_rect(center=(screen_x + bar_width//2, bar_y + bar_height//2))
+                # Sombra do texto
+                shadow_rect = text_rect.copy()
+                shadow_rect.x += 1
+                shadow_rect.y += 1
+                shadow_text = font_small.render(f"{int(progress * 100)}%", True, (0, 0, 0, 128))
+                screen.blit(shadow_text, shadow_rect)
+                screen.blit(percent_text, text_rect)
         else:
             screen.blit(tree_img, rect.topleft)
 
@@ -1009,6 +1181,35 @@ def draw_fps(screen, clock):
     fps_text = font_small.render(f"FPS: {fps_display}", True, (0, 0, 0))
     screen.blit(fps_text, (SCREEN_WIDTH - 100, 5))
 
+def draw_flying_icons():
+    current_time = pygame.time.get_ticks()
+    finished_icons = []
+    
+    for icon in flying_icons:
+        x, y, scale, progress = icon.update(current_time)
+        
+        # Redimensiona a imagem conforme a escala
+        icon_width = int(ICON_SIZE[0] * scale)
+        icon_height = int(ICON_SIZE[1] * scale)
+        scaled_icon = pygame.transform.scale(icon.image, (icon_width, icon_height))
+        
+        # Calcula a posição para centralizar a imagem redimensionada
+        draw_x = x - icon_width // 2
+        draw_y = y - icon_height // 2
+        
+        # Adiciona efeito de fade out no final
+        if progress > 0.8:
+            alpha = int(255 * (1 - (progress - 0.8) / 0.2))
+            scaled_icon.set_alpha(alpha)
+        
+        screen.blit(scaled_icon, (draw_x, draw_y))
+        
+        if icon.is_finished(current_time):
+            finished_icons.append(icon)
+    
+    # Remove ícones que terminaram
+    for icon in finished_icons:
+        flying_icons.remove(icon)
 
 
 # ----- LOOP PRINCIPAL -----
@@ -1033,10 +1234,64 @@ while running:
         last_income_time = current_time
 
     completed_trees = []
+
     for collecting_tree in collecting_trees:
         tree_pos = collecting_tree["pos"]
         start_time = collect_start_times[tree_pos]
+        
+        # Toca o som de corte se ainda não estiver tocando para esta árvore
+        if tree_pos not in cutting_sounds_playing:
+            # Para em canais diferentes para não haver conflito
+            channel = cutting_sound.play(-1)  # -1 faz loop infinito
+            if channel:
+                channel.set_volume(0.8)  # Volume alto
+                cutting_sounds_playing[tree_pos] = channel
+            else:
+                # Se não conseguiu tocar (sem canais disponíveis), tenta novamente
+                print("Sem canais disponíveis, tentando novamente...")
+                pygame.mixer.set_num_channels(pygame.mixer.get_num_channels() + 5)
+                channel = cutting_sound.play(-1)
+                if channel:
+                    channel.set_volume(0.8)
+                    cutting_sounds_playing[tree_pos] = channel
+ 
         if current_time - start_time >= upgrades.get_current_cut_time():
+            # Para o som de corte
+            if tree_pos in cutting_sounds_playing:
+                cutting_sounds_playing[tree_pos].stop()
+                del cutting_sounds_playing[tree_pos]
+            
+            # Toca o som de árvore caindo
+            falling_tree_sound.play()
+            
+            # Calcula a posição de início (onde a árvore foi cortada)
+            tree_x, tree_y = tree_pos
+            start_screen_x, start_screen_y = world_to_screen(tree_x * BASE_CELL_SIZE + BASE_CELL_SIZE/2, 
+                                                            tree_y * BASE_CELL_SIZE + BASE_CELL_SIZE/2)
+            
+            # Posição de destino - AGORA APONTANDO PARA O ÍCONE DE MADEIRA
+            # O ícone de madeira está em: resources_panel.rect.x + 15, icon_y + 45
+            icon_y = resources_panel.rect.y + 15
+            end_x = resources_panel.rect.x + 15 + ICON_SIZE[0]//2  # centro do ícone de madeira
+            end_y = icon_y + 45 + ICON_SIZE[1]//2  # centro do ícone de madeira (45 pixels abaixo do money)
+            
+            # Cria 3 ícones voadores para dar mais impacto
+            for i in range(3):
+                # Pequena variação na posição inicial para não ficarem todos iguais
+                offset_x = random.randint(-20, 20)
+                offset_y = random.randint(-20, 20)
+                
+                flying_icon = FlyingIcon(
+                    start_screen_x + offset_x, 
+                    start_screen_y + offset_y,
+                    end_x + random.randint(-5, 5),  # pequena variação no destino
+                    end_y + random.randint(-5, 5),
+                    wood_icon,
+                    duration=800 + random.randint(-100, 100)  # duração variada
+                )
+                flying_icons.append(flying_icon)
+            
+            # Remove a árvore
             for i, tree in enumerate(trees):
                 if tree["pos"] == tree_pos:
                     trees.pop(i)
@@ -1045,8 +1300,13 @@ while running:
             completed_trees.append(collecting_tree)
     
     for tree in completed_trees:
+        tree_pos = tree["pos"]
+        # Garante que o som pare
+        if tree_pos in cutting_sounds_playing:
+            cutting_sounds_playing[tree_pos].stop()
+            del cutting_sounds_playing[tree_pos]
         collecting_trees.remove(tree)
-        del collect_start_times[tree["pos"]]
+        del collect_start_times[tree_pos]
     
     completed_constructions = []
     for construction in buildings_in_progress:
@@ -1087,7 +1347,10 @@ while running:
             if event.button == 1:
                 clicked = False
                 
+                # No loop de eventos, dentro de pygame.MOUSEBUTTONDOWN, event.button == 1:
+
                 if menu_btn.rect.collidepoint(mouse_x, mouse_y):
+                    button_sound.play()  # NOVO
                     if current_mode == "menu":
                         current_mode = "none"
                     else:
@@ -1095,20 +1358,23 @@ while running:
                     preview_active = False
                     selected_building = None
                     clicked = True
-                
+
                 elif hammer_btn.rect.collidepoint(mouse_x, mouse_y):
+                    button_sound.play()  # NOVO
                     current_mode = "demolish" if current_mode != "demolish" else "none"
                     preview_active = False
                     selected_building = None
                     clicked = True
-                
+
                 elif collect_btn.rect.collidepoint(mouse_x, mouse_y):
+                    button_sound.play()  # NOVO
                     current_mode = "collect" if current_mode != "collect" else "none"
                     preview_active = False
                     selected_building = None
                     clicked = True
-                
+
                 elif upgrade_btn.rect.collidepoint(mouse_x, mouse_y):
+                    button_sound.play()  # NOVO
                     if current_mode == "upgrade":
                         current_mode = "none"
                     else:
@@ -1116,45 +1382,62 @@ while running:
                     preview_active = False
                     selected_building = None
                     clicked = True
-                
+
+                # No loop de eventos, dentro de pygame.MOUSEBUTTONDOWN, event.button == 1:
+
                 elif current_mode == "upgrade" and not clicked:
+                    upgrade_panel_rect = pygame.Rect(SCREEN_WIDTH//2 - 250, SCREEN_HEIGHT//2 - 250, 500, 450)
+                    
                     y = SCREEN_HEIGHT//2 - 180
                     
+                    # Verifica cliques nos botões de upgrade
                     sim_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, y, 400, 50)
                     if sim_rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
                         upgrades.upgrade_simultaneous()
                         clicked = True
                     
                     y += 60
                     time_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, y, 400, 50)
                     if time_rect.collidepoint(mouse_x, mouse_y) and not clicked:
+                        button_sound.play()
                         upgrades.upgrade_cut_time()
                         clicked = True
                     
                     y += 60
                     const_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, y, 400, 50)
                     if const_rect.collidepoint(mouse_x, mouse_y) and not clicked:
+                        button_sound.play()
                         upgrades.upgrade_construction_time()
                         clicked = True
                     
-                    upgrade_panel_rect = pygame.Rect(SCREEN_WIDTH//2 - 250, SCREEN_HEIGHT//2 - 250, 500, 450)
-                    
+                    # Se não clicou em nenhum botão de upgrade e clicou fora do painel, fecha o menu
                     if not clicked and not upgrade_panel_rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()  # Som ao fechar o menu
                         current_mode = "none"
                         clicked = True
-                
+
+                # No loop de eventos, dentro de pygame.MOUSEBUTTONDOWN, event.button == 1:
+
                 elif current_mode == "menu" and not clicked:
                     menu_panel_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT//2 - 200, 400, 400)
                     
+                    # Primeiro verifica se clicou em algum botão do menu
+                    clicked_on_menu_button = False
                     for name, (_, btn_rect) in menu_buttons.items():
                         if btn_rect.collidepoint(mouse_x, mouse_y):
+                            button_sound.play()
                             selected_building = name
                             current_mode = "none"
                             clicked = True
+                            clicked_on_menu_button = True
                             break
                     
-                    if not clicked and not menu_panel_rect.collidepoint(mouse_x, mouse_y):
+                    # Se não clicou em nenhum botão do menu, verifica se clicou fora do painel
+                    if not clicked_on_menu_button and not menu_panel_rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()  # Som ao fechar o menu
                         current_mode = "none"
+                        selected_building = None
                         clicked = True
                 
                 if not clicked:
@@ -1164,6 +1447,8 @@ while running:
                         if map_generator.is_water(gx, gy) or map_generator.is_sand(gx, gy):
                             pass
                         
+                        # No loop de eventos, dentro da parte do "collect":
+
                         elif current_mode == "collect":
                             if len(collecting_trees) < upgrades.simultaneous_cuts_level:
                                 for tree in trees:
@@ -1179,6 +1464,12 @@ while running:
                                             collecting_trees.append(tree)
                                             collect_start_times[(gx, gy)] = pygame.time.get_ticks()
                                         break
+                            else:
+                                # Atingiu o limite de cortes simultâneos - mostra popup
+                                popup_active = True
+                                popup_message = f"Limite de cortes atingido! ({upgrades.simultaneous_cuts_level}/{upgrades.simultaneous_cuts_level})"
+                                popup_start_time = pygame.time.get_ticks()
+                                button_sound.play()  # Som de erro
                         
                         elif current_mode == "demolish":
                             demolish_building(gx, gy)
@@ -1236,6 +1527,9 @@ while running:
         draw_preview()
     draw_ui()
 
+    # Desenha os ícones voadores (por cima de tudo)
+    draw_flying_icons()
+
     if current_mode == "menu":
         draw_menu()
     elif current_mode == "upgrade":
@@ -1248,7 +1542,18 @@ while running:
     if show_fps:
         draw_fps(screen, clock)
 
+    # Verifica se deve mostrar popup
+    if 'popup_active' in locals() and popup_active:
+        if current_time - popup_start_time < 2000:  # Mostra por 2 segundos
+            draw_popup(screen, popup_message)
+        else:
+            popup_active = False
+
     pygame.display.flip()
 
+# Para todos os sons de corte antes de sair
+for sound in cutting_sounds_playing.values():
+    sound.stop()
+    
 pygame.quit()
 sys.exit()
