@@ -99,6 +99,8 @@ building_images_original["Predio"] = pygame.image.load("assets/predio.png").conv
 building_images_original["Lojinha"] = pygame.image.load("assets/loja-game.png").convert_alpha()
 building_images_original["Shopping"] = pygame.image.load("assets/shopping-game.png").convert_alpha()
 building_images_original["Factory"] = pygame.image.load("assets/factory-game.png").convert_alpha()
+building_images_original["School"] = pygame.image.load("assets/school.png").convert_alpha()
+building_images_original["Mall"] = pygame.image.load("assets/mall.png").convert_alpha()
 
 # ===== NOVO: Configuração do FPS =====
 show_fps = True
@@ -486,7 +488,9 @@ buildings = {
     "Predio": {"cost_money": 50, "cost_wood": 25, "color": (150, 0, 0), "income": 5, "size": (1, 1), "population": 200, "build_time": 10000},
     "Lojinha": {"cost_money": 270, "cost_wood": 50, "color": (0, 0, 120), "income": 27, "size": (1, 1), "population": 0, "build_time": 15000},
     "Shopping": {"cost_money": 3000, "cost_wood": 200, "color": (120, 0, 120), "income": 670, "size": (2, 3), "population": 0, "build_time": 20000},
-    "Factory": {"cost_money": 9000, "cost_wood": 500, "color": (120, 40, 120), "income": 900, "size": (3, 3), "population": 0, "build_time": 50000}
+    "Factory": {"cost_money": 9000, "cost_wood": 500, "color": (120, 40, 120), "income": 900, "size": (3, 3), "population": 0, "build_time": 50000},
+    "School": {"cost_money": 1500, "cost_wood": 100, "color": (255, 165, 0), "income": 370, "size": (4, 3), "population": 0, "build_time": 15000},
+    "Mall": {"cost_money": 900, "cost_wood": 90, "color": (128, 0, 128), "income": 34, "size": (3, 1), "population": 0, "build_time": 10000},
 }
 
 grid = [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
