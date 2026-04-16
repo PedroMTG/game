@@ -102,6 +102,13 @@ building_images_original["Factory"] = pygame.image.load("assets/factory-game.png
 building_images_original["School"] = pygame.image.load("assets/school.png").convert_alpha()
 building_images_original["Mall"] = pygame.image.load("assets/mall.png").convert_alpha()
 
+# Imagem temporária do Gerador de Petróleo (retângulo colorido)
+oil_gen_placeholder = pygame.Surface((BASE_CELL_SIZE, BASE_CELL_SIZE), pygame.SRCALPHA)
+pygame.draw.rect(oil_gen_placeholder, (40, 60, 100), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE))
+pygame.draw.circle(oil_gen_placeholder, (255, 140, 0), (BASE_CELL_SIZE//2, BASE_CELL_SIZE//2), BASE_CELL_SIZE//4)
+pygame.draw.rect(oil_gen_placeholder, (100, 150, 200), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE), width=3)
+building_images_original["Gerador de petróleo"] = oil_gen_placeholder
+
 # ===== NOVO: Configuração do FPS =====
 show_fps = True
 fps_update_time = 0
@@ -235,6 +242,39 @@ class Panel:
         # Desenha borda
         pygame.draw.rect(surface, (255,255,255,50), self.rect, width=2, border_radius=self.border_radius)
 
+# ===== Classe ScrollBar para rolagem =====
+class ScrollBar:
+    def __init__(self, x, y, width, height, total_items, visible_items):
+        self.track_rect = pygame.Rect(x, y, width, height)
+        self.total_items = total_items
+        self.visible_items = visible_items
+        self.offset = 0
+        self.max_offset = max(0, total_items - visible_items)
+        
+    def update_dimensions(self, total_items, visible_items):
+        self.total_items = total_items
+        self.visible_items = visible_items
+        self.max_offset = max(0, total_items - visible_items)
+        self.offset = min(self.offset, self.max_offset)
+    
+    def get_thumb_rect(self):
+        if self.max_offset == 0:
+            return self.track_rect
+        thumb_height = max(20, self.track_rect.height * (self.visible_items / self.total_items))
+        thumb_y = self.track_rect.y + (self.offset / self.max_offset) * (self.track_rect.height - thumb_height)
+        return pygame.Rect(self.track_rect.x, thumb_y, self.track_rect.width, thumb_height)
+    
+    def scroll(self, delta):
+        self.offset = max(0, min(self.offset + delta, self.max_offset))
+    
+    def draw(self, surface):
+        # Desenha track (fundo)
+        pygame.draw.rect(surface, (30, 40, 60), self.track_rect, border_radius=8)
+        # Desenha thumb (controle)
+        thumb = self.get_thumb_rect()
+        pygame.draw.rect(surface, COLORS['primary'], thumb, border_radius=8)
+        pygame.draw.rect(surface, (255, 255, 255, 100), thumb, width=1, border_radius=8)
+
 # ===== Botões da UI =====
 menu_btn = Button(20, 20, 100, 40, "Menu", COLORS['primary'])
 hammer_btn = Button(130, 20, 100, 40, "Martelo", COLORS['danger'])
@@ -263,7 +303,7 @@ class MapGenerator:
     
     def noise(self, x, y):
         return math.sin(x * 0.3) * math.cos(y * 0.3) * random.uniform(-1, 1)
-    
+
     def generate_organic_map(self):
         for y in range(GRID_SIZE):
             for x in range(GRID_SIZE):
@@ -491,6 +531,7 @@ buildings = {
     "Factory": {"cost_money": 9000, "cost_wood": 500, "color": (120, 40, 120), "income": 900, "size": (3, 3), "population": 0, "build_time": 50000},
     "School": {"cost_money": 1500, "cost_wood": 100, "color": (255, 165, 0), "income": 370, "size": (4, 3), "population": 0, "build_time": 15000},
     "Mall": {"cost_money": 900, "cost_wood": 90, "color": (128, 0, 128), "income": 34, "size": (3, 1), "population": 0, "build_time": 10000},
+    "Gerador de petróleo": {"cost_money": 500000, "cost_wood": 50000, "color": (40, 60, 100), "income": 350000, "size": (5, 5), "population": 0, "build_time": 300},
 }
 
 grid = [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
@@ -502,12 +543,31 @@ selected_building = None
 preview_active = False
 
 # ----- MENU PRINCIPAL (para botões) -----
+building_names = list(buildings.keys())  # Lista ordenada de nomes
 menu_buttons = {}
 y_offset = 0
-for name in buildings:
+for name in building_names:
     btn_rect = pygame.Rect(SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT//2 - 150 + y_offset, 300, 45)
     menu_buttons[name] = (name, btn_rect)
     y_offset += 50
+
+# ===== ESTADO DO JOGO =====
+game_state = "start_screen"  # start_screen | playing | paused | options
+options_from = "start"        # "start" ou "game"
+sfx_volume = 1.0
+menu_scroll = ScrollBar(SCREEN_WIDTH//2 + 155, SCREEN_HEIGHT//2 - 95, 15, 100, len(buildings), 4)
+
+# Botões tela inicial
+_bw, _bh = 280, 65
+start_play_btn    = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 - 30,  _bw, _bh, "Jogar",  COLORS['success'])
+start_options_btn = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 55,  _bw, _bh, "Opções", COLORS['primary'])
+start_quit_btn    = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 140, _bw, _bh, "Sair",   COLORS['danger'])
+
+# Botões menu de pausa
+pause_resume_btn  = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 - 120, _bw, _bh, "Continuar", COLORS['success'])
+pause_newgame_btn = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 - 35,  _bw, _bh, "Novo Jogo", COLORS['primary'])
+pause_options_btn = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 50,  _bw, _bh, "Opções",    COLORS['warning'])
+pause_quit_btn    = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 135, _bw, _bh, "Sair",      COLORS['danger'])
 
 # ===== FUNÇÕES DE CÂMERA E ZOOM =====
 def world_to_screen(world_x, world_y):
@@ -555,11 +615,17 @@ def can_place_building(name, gx, gy):
     if gx + width > GRID_SIZE or gy + height > GRID_SIZE:
         return False
 
-    # Verifica se o terreno é válido (não é água ou areia)
+    # Verifica se o terreno é válido
     for y in range(gy, gy+height):
         for x in range(gx, gx+width):
-            if map_generator.is_water(x, y) or map_generator.is_sand(x, y):
-                return False
+            if name == "Gerador de petróleo":
+                # Gerador de petróleo SÓ pode ser construído na água
+                if not map_generator.is_water(x, y):
+                    return False
+            else:
+                # Outros prédios não podem ser construídos em água ou areia
+                if map_generator.is_water(x, y) or map_generator.is_sand(x, y):
+                    return False
 
     # Verifica se alguma célula já está ocupada por uma construção completa
     for y in range(gy, gy+height):
@@ -1033,35 +1099,73 @@ def draw_menu():
     overlay.fill((0, 0, 0, 128))
     screen.blit(overlay, (0, 0))
     
-    menu_panel = Panel(SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT//2 - 200, 400, 400, (44, 62, 80, 240))
+    # Painel principal
+    panel_x, panel_y = SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT//2 - 200
+    panel_w, panel_h = 400, 400
+    menu_panel = Panel(panel_x, panel_y, panel_w, panel_h, (44, 62, 80, 240))
     menu_panel.draw(screen)
     
+    # Título
     title = font_large.render("CONSTRUÇÕES", True, COLORS['gold'])
-    screen.blit(title, (SCREEN_WIDTH//2 - 120, SCREEN_HEIGHT//2 - 170))
+    screen.blit(title, (SCREEN_WIDTH//2 - 120, panel_y + 30))
     
-    y_offset = SCREEN_HEIGHT//2 - 110
-    for name, (_, btn_rect) in menu_buttons.items():
-        color = COLORS['primary'] if buildings[name]['population'] == 0 else COLORS['success']
+    # Área de scroll (onde os botões aparecem)
+    scroll_area_x = panel_x + 15
+    scroll_area_y = panel_y + 70
+    scroll_area_w = 370
+    scroll_area_h = 280
+    
+    # Cria clipping region para os botões
+    clip_rect = pygame.Rect(scroll_area_x, scroll_area_y, scroll_area_w, scroll_area_h)
+    old_clip = screen.get_clip()
+    screen.set_clip(clip_rect)
+    
+    # Desenha botões com offset de scroll
+    y_offset = scroll_area_y - int(menu_scroll.offset * 50)  # 50 é a altura de cada botão
+    
+    for name in building_names:
+        # Cria novo rect com posição atualizada pelo scroll
+        btn_rect = pygame.Rect(scroll_area_x + 25, y_offset, 300, 45)
         
-        pygame.draw.rect(screen, color, btn_rect, border_radius=8)
-        pygame.draw.rect(screen, (255,255,255,50), btn_rect, width=2, border_radius=8)
+        # Só desenha se está visível (dentro da área de scroll)
+        if btn_rect.top < scroll_area_y + scroll_area_h and btn_rect.bottom > scroll_area_y:
+            color = COLORS['primary'] if buildings[name]['population'] == 0 else COLORS['success']
+            
+            pygame.draw.rect(screen, color, btn_rect, border_radius=8)
+            pygame.draw.rect(screen, (255,255,255,50), btn_rect, width=2, border_radius=8)
+            
+            name_text = font_medium.render(name, True, (255,255,255))
+            screen.blit(name_text, (btn_rect.x + 10, btn_rect.y + 5))
+            
+            screen.blit(pygame.transform.scale(money_icon, (15, 15)), (btn_rect.x + 10, btn_rect.y + 30))
+            cost_text = font_small.render(f"{buildings[name]['cost_money']}", True, (255,255,255))
+            screen.blit(cost_text, (btn_rect.x + 30, btn_rect.y + 30))
+            
+            screen.blit(pygame.transform.scale(wood_icon, (15, 15)), (btn_rect.x + 80, btn_rect.y + 30))
+            wood_text = font_small.render(f"{buildings[name]['cost_wood']}", True, (255,255,255))
+            screen.blit(wood_text, (btn_rect.x + 100, btn_rect.y + 30))
+            
+            if buildings[name]['population'] > 0:
+                pop_text = font_small.render(f"+{buildings[name]['population']} pop", True, COLORS['gold'])
+                screen.blit(pop_text, (btn_rect.x + 150, btn_rect.y + 30))
+            
+            # Armazena a posição atualizada para clique
+            menu_buttons[name] = (name, btn_rect)
         
-        name_text = font_medium.render(name, True, (255,255,255))
-        screen.blit(name_text, (btn_rect.x + 10, btn_rect.y + 5))
-        
-        screen.blit(pygame.transform.scale(money_icon, (15, 15)), (btn_rect.x + 10, btn_rect.y + 30))
-        cost_text = font_small.render(f"{buildings[name]['cost_money']}", True, (255,255,255))
-        screen.blit(cost_text, (btn_rect.x + 30, btn_rect.y + 30))
-        
-        screen.blit(pygame.transform.scale(wood_icon, (15, 15)), (btn_rect.x + 80, btn_rect.y + 30))
-        wood_text = font_small.render(f"{buildings[name]['cost_wood']}", True, (255,255,255))
-        screen.blit(wood_text, (btn_rect.x + 100, btn_rect.y + 30))
-        
-        if buildings[name]['population'] > 0:
-            pop_text = font_small.render(f"+{buildings[name]['population']} pop", True, COLORS['gold'])
-            screen.blit(pop_text, (btn_rect.x + 150, btn_rect.y + 30))
-        
-        y_offset += 50
+        y_offset += 55
+    
+    # Remove clipping
+    screen.set_clip(old_clip)
+    
+    # Desenha borda da área de scroll
+    pygame.draw.rect(screen, (255, 255, 255, 50), clip_rect, width=2, border_radius=8)
+    
+    # Desenha scrollbar (posicionado corretamente)
+    scrollbar_x = scroll_area_x + scroll_area_w + -25
+    menu_scroll.track_rect.x = scrollbar_x
+    menu_scroll.track_rect.y = scroll_area_y
+    menu_scroll.track_rect.height = scroll_area_h
+    menu_scroll.draw(screen)
 
 def draw_upgrade_menu():
     overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -1216,6 +1320,132 @@ def draw_flying_icons():
         flying_icons.remove(icon)
 
 
+# ===== RESET DO JOGO =====
+def reset_game():
+    global money, wood, grid, trees, collecting_trees, collect_start_times
+    global cutting_sounds_playing, buildings_in_progress, building_start_times
+    global building_id_counter, current_mode, selected_building, preview_active
+    for ch in cutting_sounds_playing.values():
+        ch.stop()
+    cutting_sounds_playing.clear()
+    money = 10000033
+    wood = 2003300
+    grid = [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
+    collecting_trees.clear()
+    collect_start_times.clear()
+    buildings_in_progress.clear()
+    building_start_times.clear()
+    building_id_counter = 0
+    flying_icons.clear()
+    trees.clear()
+    for _ in range(1000):
+        attempts = 0
+        while attempts < 100:
+            x = random.randint(0, GRID_SIZE - 1)
+            y = random.randint(0, GRID_SIZE - 1)
+            if not map_generator.is_water(x, y) and not map_generator.is_sand(x, y):
+                trees.append({"pos": (x, y), "type": random.randint(0, 4)})
+                break
+            attempts += 1
+    population_system.calculate_population(grid)
+    current_mode = "none"
+    selected_building = None
+    preview_active = False
+
+
+def _apply_sfx_volume(vol):
+    build_sound.set_volume(0.5 * vol)
+    break_sound.set_volume(0.5 * vol)
+    button_sound.set_volume(vol)
+    build_finish_sound.set_volume(vol)
+    cutting_sound.set_volume(3.0 * vol)
+    falling_tree_sound.set_volume(0.4 * vol)
+
+
+def draw_start_screen():
+    screen.fill((15, 25, 45))
+    for gx in range(0, SCREEN_WIDTH, 60):
+        pygame.draw.line(screen, (25, 40, 65), (gx, 0), (gx, SCREEN_HEIGHT))
+    for gy in range(0, SCREEN_HEIGHT, 60):
+        pygame.draw.line(screen, (25, 40, 65), (0, gy), (SCREEN_WIDTH, gy))
+
+    title_font = pygame.font.Font(None, 110)
+    title_surf = title_font.render("City Builder", True, COLORS['gold'])
+    screen.blit(title_surf, title_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 160)))
+
+    sub = font_medium.render("Construa a cidade dos seus sonhos!", True, (180, 210, 240))
+    screen.blit(sub, sub.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 90)))
+
+    mx, my = pygame.mouse.get_pos()
+    for btn in (start_play_btn, start_options_btn, start_quit_btn):
+        btn.hovered = btn.rect.collidepoint(mx, my)
+        btn.draw(screen)
+
+    draw_custom_cursor(screen, mx, my)
+
+
+def draw_pause_menu():
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 160))
+    screen.blit(overlay, (0, 0))
+
+    panel = Panel(SCREEN_WIDTH // 2 - 210, SCREEN_HEIGHT // 2 - 185, 420, 390, (44, 62, 80, 245))
+    panel.draw(screen)
+
+    t = font_large.render("PAUSADO", True, COLORS['gold'])
+    screen.blit(t, t.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 155)))
+
+    mx, my = pygame.mouse.get_pos()
+    for btn in (pause_resume_btn, pause_newgame_btn, pause_options_btn, pause_quit_btn):
+        btn.hovered = btn.rect.collidepoint(mx, my)
+        btn.draw(screen)
+
+    draw_custom_cursor(screen, mx, my)
+
+
+def draw_options_screen():
+    is_from_game = (options_from == "game")
+    if not is_from_game:
+        screen.fill((15, 25, 45))
+        for gx in range(0, SCREEN_WIDTH, 60):
+            pygame.draw.line(screen, (25, 40, 65), (gx, 0), (gx, SCREEN_HEIGHT))
+        for gy in range(0, SCREEN_HEIGHT, 60):
+            pygame.draw.line(screen, (25, 40, 65), (0, gy), (SCREEN_WIDTH, gy))
+    else:
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 170))
+        screen.blit(overlay, (0, 0))
+
+    panel = Panel(SCREEN_WIDTH // 2 - 260, SCREEN_HEIGHT // 2 - 200, 520, 400, (44, 62, 80, 245))
+    panel.draw(screen)
+
+    t = font_large.render("OPÇÕES", True, COLORS['gold'])
+    screen.blit(t, t.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 168)))
+
+    lbl = font_medium.render(f"Volume dos Sons: {int(sfx_volume * 100)}%", True, (255, 255, 255))
+    screen.blit(lbl, (SCREEN_WIDTH // 2 - 220, SCREEN_HEIGHT // 2 - 120))
+
+    bar_rect = pygame.Rect(SCREEN_WIDTH // 2 - 220, SCREEN_HEIGHT // 2 - 85, 440, 24)
+    pygame.draw.rect(screen, (50, 50, 60), bar_rect, border_radius=12)
+    fill = int(440 * sfx_volume)
+    if fill:
+        pygame.draw.rect(screen, COLORS['primary'],
+                         pygame.Rect(bar_rect.x, bar_rect.y, fill, 24), border_radius=12)
+    pygame.draw.rect(screen, (180, 180, 200), bar_rect, width=2, border_radius=12)
+
+    hint = font_small.render("Clique ou arraste na barra para ajustar", True, (160, 160, 180))
+    screen.blit(hint, (SCREEN_WIDTH // 2 - 220, SCREEN_HEIGHT // 2 - 55))
+
+    back_rect = pygame.Rect(SCREEN_WIDTH // 2 - 140, SCREEN_HEIGHT // 2 + 140, 280, 55)
+    mx, my = pygame.mouse.get_pos()
+    bc = COLORS['danger'] if back_rect.collidepoint(mx, my) else (170, 40, 30)
+    pygame.draw.rect(screen, bc, back_rect, border_radius=10)
+    bt = font_medium.render("Voltar", True, (255, 255, 255))
+    screen.blit(bt, bt.get_rect(center=back_rect.center))
+
+    draw_custom_cursor(screen, mx, my)
+
+
 # ----- LOOP PRINCIPAL -----
 running = True
 last_income_time = pygame.time.get_ticks()
@@ -1321,9 +1551,11 @@ while running:
     for construction in completed_constructions:
         complete_construction(construction)
 
-    update_camera_smooth()
+    if game_state == "playing":
+        update_camera_smooth()
 
-    screen.fill((200, 240, 200))
+    if game_state in ("playing", "paused"):
+        screen.fill((200, 240, 200))
     mouse_x, mouse_y = pygame.mouse.get_pos()
 
     menu_btn.hovered = menu_btn.rect.collidepoint(mouse_x, mouse_y)
@@ -1339,219 +1571,263 @@ while running:
             if event.key == pygame.K_F11:
                 pygame.display.toggle_fullscreen()
             elif event.key == pygame.K_ESCAPE:
-                current_mode = "none"
-                selected_building = None
-                preview_active = False
+                if game_state == "playing":
+                    game_state = "paused"
+                    current_mode = "none"
+                    selected_building = None
+                    preview_active = False
+                elif game_state == "paused":
+                    game_state = "playing"
+                elif game_state == "options":
+                    game_state = "start_screen" if options_from == "start" else "paused"
+                else:
+                    current_mode = "none"
+                    selected_building = None
+                    preview_active = False
 
-        if event.type == pygame.MOUSEWHEEL:
-            new_zoom = target_zoom + (event.y * ZOOM_SPEED)
-            apply_zoom(new_zoom, mouse_x, mouse_y)
+        if event.type == pygame.MOUSEWHEEL and game_state == "playing":
+            # Verifica se está no menu com scroll aberto
+            if current_mode == "menu":
+                menu_area = pygame.Rect(SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT//2 - 200, 400, 400)
+                if menu_area.collidepoint(mouse_x, mouse_y):
+                    menu_scroll.scroll(-event.y)  # Inverte para scroll natural
+                else:
+                    new_zoom = target_zoom + (event.y * ZOOM_SPEED)
+                    apply_zoom(new_zoom, mouse_x, mouse_y)
+            else:
+                new_zoom = target_zoom + (event.y * ZOOM_SPEED)
+                apply_zoom(new_zoom, mouse_x, mouse_y)
 
         if event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
-                clicked = False
-                
-                # No loop de eventos, dentro de pygame.MOUSEBUTTONDOWN, event.button == 1:
-
-                if menu_btn.rect.collidepoint(mouse_x, mouse_y):
-                    button_sound.play()  # NOVO
-                    if current_mode == "menu":
-                        current_mode = "none"
-                    else:
-                        current_mode = "menu"
-                    preview_active = False
-                    selected_building = None
-                    clicked = True
-
-                elif hammer_btn.rect.collidepoint(mouse_x, mouse_y):
-                    button_sound.play()  # NOVO
-                    current_mode = "demolish" if current_mode != "demolish" else "none"
-                    preview_active = False
-                    selected_building = None
-                    clicked = True
-
-                elif collect_btn.rect.collidepoint(mouse_x, mouse_y):
-                    button_sound.play()  # NOVO
-                    current_mode = "collect" if current_mode != "collect" else "none"
-                    preview_active = False
-                    selected_building = None
-                    clicked = True
-
-                elif upgrade_btn.rect.collidepoint(mouse_x, mouse_y):
-                    button_sound.play()  # NOVO
-                    if current_mode == "upgrade":
-                        current_mode = "none"
-                    else:
-                        current_mode = "upgrade"
-                    preview_active = False
-                    selected_building = None
-                    clicked = True
-
-                # No loop de eventos, dentro de pygame.MOUSEBUTTONDOWN, event.button == 1:
-
-                elif current_mode == "upgrade" and not clicked:
-                    upgrade_panel_rect = pygame.Rect(SCREEN_WIDTH//2 - 250, SCREEN_HEIGHT//2 - 250, 500, 450)
-                    
-                    y = SCREEN_HEIGHT//2 - 180
-                    
-                    # Verifica cliques nos botões de upgrade
-                    sim_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, y, 400, 50)
-                    if sim_rect.collidepoint(mouse_x, mouse_y):
+                # --- Tela inicial ---
+                if game_state == "start_screen":
+                    if start_play_btn.rect.collidepoint(mouse_x, mouse_y):
                         button_sound.play()
-                        upgrades.upgrade_simultaneous()
-                        clicked = True
-                    
-                    y += 60
-                    time_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, y, 400, 50)
-                    if time_rect.collidepoint(mouse_x, mouse_y) and not clicked:
+                        game_state = "playing"
+                    elif start_options_btn.rect.collidepoint(mouse_x, mouse_y):
                         button_sound.play()
-                        upgrades.upgrade_cut_time()
-                        clicked = True
-                    
-                    y += 60
-                    const_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, y, 400, 50)
-                    if const_rect.collidepoint(mouse_x, mouse_y) and not clicked:
+                        options_from = "start"
+                        game_state = "options"
+                    elif start_quit_btn.rect.collidepoint(mouse_x, mouse_y):
+                        running = False
+
+                # --- Menu de pausa ---
+                elif game_state == "paused":
+                    if pause_resume_btn.rect.collidepoint(mouse_x, mouse_y):
                         button_sound.play()
-                        upgrades.upgrade_construction_time()
-                        clicked = True
-                    
-                    # Se não clicou em nenhum botão de upgrade e clicou fora do painel, fecha o menu
-                    if not clicked and not upgrade_panel_rect.collidepoint(mouse_x, mouse_y):
-                        button_sound.play()  # Som ao fechar o menu
-                        current_mode = "none"
-                        clicked = True
+                        game_state = "playing"
+                    elif pause_newgame_btn.rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        reset_game()
+                        game_state = "playing"
+                    elif pause_options_btn.rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        options_from = "game"
+                        game_state = "options"
+                    elif pause_quit_btn.rect.collidepoint(mouse_x, mouse_y):
+                        running = False
 
-                # No loop de eventos, dentro de pygame.MOUSEBUTTONDOWN, event.button == 1:
+                # --- Tela de opções ---
+                elif game_state == "options":
+                    _bar = pygame.Rect(SCREEN_WIDTH // 2 - 220, SCREEN_HEIGHT // 2 - 85, 440, 24)
+                    _back = pygame.Rect(SCREEN_WIDTH // 2 - 140, SCREEN_HEIGHT // 2 + 140, 280, 55)
+                    if _back.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        game_state = "start_screen" if options_from == "start" else "paused"
+                    elif _bar.collidepoint(mouse_x, mouse_y):
+                        sfx_volume = max(0.0, min(1.0, (mouse_x - _bar.x) / _bar.width))
+                        _apply_sfx_volume(sfx_volume)
 
-                elif current_mode == "menu" and not clicked:
-                    menu_panel_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT//2 - 200, 400, 400)
-                    
-                    # Primeiro verifica se clicou em algum botão do menu
-                    clicked_on_menu_button = False
-                    for name, (_, btn_rect) in menu_buttons.items():
-                        if btn_rect.collidepoint(mouse_x, mouse_y):
-                            button_sound.play()
-                            selected_building = name
+                # --- Jogo ---
+                elif game_state == "playing":
+                    clicked = False
+
+                    if menu_btn.rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        if current_mode == "menu":
                             current_mode = "none"
-                            clicked = True
-                            clicked_on_menu_button = True
-                            break
-                    
-                    # Se não clicou em nenhum botão do menu, verifica se clicou fora do painel
-                    if not clicked_on_menu_button and not menu_panel_rect.collidepoint(mouse_x, mouse_y):
-                        button_sound.play()  # Som ao fechar o menu
-                        current_mode = "none"
+                        else:
+                            current_mode = "menu"
+                        preview_active = False
                         selected_building = None
                         clicked = True
-                
-                if not clicked:
-                    gx, gy = get_cell_at_mouse(mouse_x, mouse_y)
-                    
-                    if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE:
-                        if map_generator.is_water(gx, gy) or map_generator.is_sand(gx, gy):
-                            pass
-                        
-                        # No loop de eventos, dentro da parte do "collect":
 
-                        elif current_mode == "collect":
-                            if len(collecting_trees) < upgrades.simultaneous_cuts_level:
-                                for tree in trees:
-                                    if tree["pos"] == (gx, gy) and money >= COLLECT_COST:
-                                        already_collecting = False
-                                        for ct in collecting_trees:
-                                            if ct["pos"] == (gx, gy):
-                                                already_collecting = True
-                                                break
-                                        
-                                        if not already_collecting:
-                                            money -= COLLECT_COST
-                                            collecting_trees.append(tree)
-                                            collect_start_times[(gx, gy)] = pygame.time.get_ticks()
-                                        break
-                            else:
-                                # Atingiu o limite de cortes simultâneos - mostra popup
-                                popup_active = True
-                                popup_message = f"Limite de cortes atingido! ({upgrades.simultaneous_cuts_level}/{upgrades.simultaneous_cuts_level})"
-                                popup_start_time = pygame.time.get_ticks()
-                                button_sound.play()  # Som de erro
-                        
-                        elif current_mode == "demolish":
-                            demolish_building(gx, gy)
-                        
-                        elif selected_building and current_mode == "none":
-                            preview_active = True
+                    elif hammer_btn.rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        current_mode = "demolish" if current_mode != "demolish" else "none"
+                        preview_active = False
+                        selected_building = None
+                        clicked = True
+
+                    elif collect_btn.rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        current_mode = "collect" if current_mode != "collect" else "none"
+                        preview_active = False
+                        selected_building = None
+                        clicked = True
+
+                    elif upgrade_btn.rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        if current_mode == "upgrade":
+                            current_mode = "none"
+                        else:
+                            current_mode = "upgrade"
+                        preview_active = False
+                        selected_building = None
+                        clicked = True
+
+                    elif current_mode == "upgrade" and not clicked:
+                        upgrade_panel_rect = pygame.Rect(SCREEN_WIDTH//2 - 250, SCREEN_HEIGHT//2 - 250, 500, 450)
+                        y = SCREEN_HEIGHT//2 - 180
+
+                        sim_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, y, 400, 50)
+                        if sim_rect.collidepoint(mouse_x, mouse_y):
+                            button_sound.play()
+                            upgrades.upgrade_simultaneous()
+                            clicked = True
+
+                        y += 60
+                        time_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, y, 400, 50)
+                        if time_rect.collidepoint(mouse_x, mouse_y) and not clicked:
+                            button_sound.play()
+                            upgrades.upgrade_cut_time()
+                            clicked = True
+
+                        y += 60
+                        const_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, y, 400, 50)
+                        if const_rect.collidepoint(mouse_x, mouse_y) and not clicked:
+                            button_sound.play()
+                            upgrades.upgrade_construction_time()
+                            clicked = True
+
+                        if not clicked and not upgrade_panel_rect.collidepoint(mouse_x, mouse_y):
+                            button_sound.play()
+                            current_mode = "none"
+                            clicked = True
+
+                    elif current_mode == "menu" and not clicked:
+                        menu_panel_rect = pygame.Rect(SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT//2 - 200, 400, 400)
+                        clicked_on_menu_button = False
+                        for name, (_, btn_rect) in menu_buttons.items():
+                            if btn_rect.collidepoint(mouse_x, mouse_y):
+                                button_sound.play()
+                                selected_building = name
+                                current_mode = "none"
+                                clicked = True
+                                clicked_on_menu_button = True
+                                break
+
+                        if not clicked_on_menu_button and not menu_panel_rect.collidepoint(mouse_x, mouse_y):
+                            button_sound.play()
+                            current_mode = "none"
+                            selected_building = None
+                            clicked = True
+
+                    if not clicked:
+                        gx, gy = get_cell_at_mouse(mouse_x, mouse_y)
+                        if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE:
+                            if map_generator.is_water(gx, gy) or map_generator.is_sand(gx, gy):
+                                pass
+                            elif current_mode == "collect":
+                                if len(collecting_trees) < upgrades.simultaneous_cuts_level:
+                                    for tree in trees:
+                                        if tree["pos"] == (gx, gy) and money >= COLLECT_COST:
+                                            already_collecting = False
+                                            for ct in collecting_trees:
+                                                if ct["pos"] == (gx, gy):
+                                                    already_collecting = True
+                                                    break
+                                            if not already_collecting:
+                                                money -= COLLECT_COST
+                                                collecting_trees.append(tree)
+                                                collect_start_times[(gx, gy)] = pygame.time.get_ticks()
+                                            break
+                                else:
+                                    popup_active = True
+                                    popup_message = f"Limite de cortes atingido! ({upgrades.simultaneous_cuts_level}/{upgrades.simultaneous_cuts_level})"
+                                    popup_start_time = pygame.time.get_ticks()
+                                    button_sound.play()
+                            elif current_mode == "demolish":
+                                demolish_building(gx, gy)
+                            elif selected_building and current_mode == "none":
+                                preview_active = True
 
             elif event.button == 3:
-                dragging = True
-                last_mouse_pos = (mouse_x, mouse_y)
-                last_camera_x = target_camera_x
-                last_camera_y = target_camera_y
+                if game_state == "playing":
+                    dragging = True
+                    last_mouse_pos = (mouse_x, mouse_y)
+                    last_camera_x = target_camera_x
+                    last_camera_y = target_camera_y
 
         if event.type == pygame.MOUSEBUTTONUP:
-            if event.button == 3:
-                dragging = False
+            if game_state == "playing":
+                if event.button == 3:
+                    dragging = False
 
-            if event.button == 1 and preview_active:
-                gx, gy = get_cell_at_mouse(mouse_x, mouse_y)
-                
-                if not (map_generator.is_water(gx, gy) or map_generator.is_sand(gx, gy)):
-                    cost_money = buildings[selected_building]["cost_money"]
-                    cost_wood = buildings[selected_building]["cost_wood"]
+                if event.button == 1 and preview_active:
+                    gx, gy = get_cell_at_mouse(mouse_x, mouse_y)
+                    if not (map_generator.is_water(gx, gy) or map_generator.is_sand(gx, gy)):
+                        cost_money = buildings[selected_building]["cost_money"]
+                        cost_wood = buildings[selected_building]["cost_wood"]
+                        if (can_place_building(selected_building, gx, gy) and
+                                money >= cost_money and wood >= cost_wood):
+                            start_construction(selected_building, gx, gy)
+                    preview_active = False
 
-                    if (can_place_building(selected_building, gx, gy) and 
-                        money >= cost_money and wood >= cost_wood):
-                        start_construction(selected_building, gx, gy)
+        if event.type == pygame.MOUSEMOTION:
+            if game_state == "options" and pygame.mouse.get_pressed()[0]:
+                _bar = pygame.Rect(SCREEN_WIDTH // 2 - 220, SCREEN_HEIGHT // 2 - 85, 440, 24)
+                if _bar.collidepoint(mouse_x, mouse_y):
+                    sfx_volume = max(0.0, min(1.0, (mouse_x - _bar.x) / _bar.width))
+                    _apply_sfx_volume(sfx_volume)
+            elif dragging and game_state == "playing":
+                dx = mouse_x - last_mouse_pos[0]
+                dy = mouse_y - last_mouse_pos[1]
+                target_camera_x = last_camera_x - dx / zoom
+                target_camera_y = last_camera_y - dy / zoom
+                max_x = GRID_SIZE * BASE_CELL_SIZE - SCREEN_WIDTH / zoom
+                max_y = GRID_SIZE * BASE_CELL_SIZE - SCREEN_HEIGHT / zoom
+                target_camera_x = max(0, min(target_camera_x, max_x))
+                target_camera_y = max(0, min(target_camera_y, max_y))
+                last_camera_x = target_camera_x
+                last_camera_y = target_camera_y
+                last_mouse_pos = (mouse_x, mouse_y)
 
-                preview_active = False
+    if game_state == "start_screen":
+        draw_start_screen()
+    elif game_state == "options":
+        draw_options_screen()
+    else:  # playing or paused
+        menu_btn.active = (current_mode == "menu")
+        hammer_btn.active = (current_mode == "demolish")
+        collect_btn.active = (current_mode == "collect")
+        upgrade_btn.active = (current_mode == "upgrade")
 
-        if event.type == pygame.MOUSEMOTION and dragging:
-            dx = mouse_x - last_mouse_pos[0]
-            dy = mouse_y - last_mouse_pos[1]
-            
-            target_camera_x = last_camera_x - dx / zoom
-            target_camera_y = last_camera_y - dy / zoom
-            
-            max_x = GRID_SIZE * BASE_CELL_SIZE - SCREEN_WIDTH / zoom
-            max_y = GRID_SIZE * BASE_CELL_SIZE - SCREEN_HEIGHT / zoom
-            target_camera_x = max(0, min(target_camera_x, max_x))
-            target_camera_y = max(0, min(target_camera_y, max_y))
-            
-            last_camera_x = target_camera_x
-            last_camera_y = target_camera_y
-            last_mouse_pos = (mouse_x, mouse_y)
+        draw_grid()
+        if preview_active:
+            draw_preview()
+        draw_ui()
+        draw_flying_icons()
 
-    menu_btn.active = (current_mode == "menu")
-    hammer_btn.active = (current_mode == "demolish")
-    collect_btn.active = (current_mode == "collect")
-    upgrade_btn.active = (current_mode == "upgrade")
+        if current_mode == "menu":
+            draw_menu()
+        elif current_mode == "upgrade":
+            draw_upgrade_menu()
 
-    draw_grid()      # Primeiro desenha o fundo
-    # draw_trees()     # Depois desenha as árvores POR CIMA do fundo
-    if preview_active:
-        draw_preview()
-    draw_ui()
+        if show_fps:
+            draw_fps(screen, clock)
 
-    # Desenha os ícones voadores (por cima de tudo)
-    draw_flying_icons()
+        if 'popup_active' in locals() and popup_active:
+            if current_time - popup_start_time < 2000:
+                draw_popup(screen, popup_message)
+            else:
+                popup_active = False
 
-    if current_mode == "menu":
-        draw_menu()
-    elif current_mode == "upgrade":
-        draw_upgrade_menu()
-
-    # ===== NOVO: Desenha cursor personalizado por cima de tudo =====
-    draw_custom_cursor(screen, mouse_x, mouse_y)
-    # ===== NOVO: Desenha FPS =====
-
-    if show_fps:
-        draw_fps(screen, clock)
-
-    # Verifica se deve mostrar popup
-    if 'popup_active' in locals() and popup_active:
-        if current_time - popup_start_time < 2000:  # Mostra por 2 segundos
-            draw_popup(screen, popup_message)
+        if game_state == "paused":
+            draw_pause_menu()
         else:
-            popup_active = False
+            draw_custom_cursor(screen, mouse_x, mouse_y)
 
     pygame.display.flip()
 
