@@ -109,6 +109,13 @@ pygame.draw.circle(oil_gen_placeholder, (255, 140, 0), (BASE_CELL_SIZE//2, BASE_
 pygame.draw.rect(oil_gen_placeholder, (100, 150, 200), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE), width=3)
 building_images_original["Gerador de petróleo"] = oil_gen_placeholder
 
+# Imagem temporária da Pedreira
+stone_quarry_placeholder = pygame.Surface((BASE_CELL_SIZE, BASE_CELL_SIZE), pygame.SRCALPHA)
+pygame.draw.rect(stone_quarry_placeholder, (100, 100, 110), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE))
+pygame.draw.polygon(stone_quarry_placeholder, (170, 170, 180), [(BASE_CELL_SIZE//2, 6), (BASE_CELL_SIZE-6, BASE_CELL_SIZE-8), (6, BASE_CELL_SIZE-8)])
+pygame.draw.rect(stone_quarry_placeholder, (210, 210, 220), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE), width=3)
+building_images_original["Pedreira"] = stone_quarry_placeholder
+
 # ===== NOVO: Configuração do FPS =====
 show_fps = True
 fps_update_time = 0
@@ -156,6 +163,14 @@ except:
     population_icon.fill((255, 215, 0))
     print("Arquivo assets/population.png não encontrado. Usando fallback.")
 
+oil_icon = pygame.Surface(ICON_SIZE, pygame.SRCALPHA)
+oil_icon.fill((30, 30, 30))
+pygame.draw.circle(oil_icon, (255, 140, 0), (ICON_SIZE[0]//2, ICON_SIZE[1]//2), ICON_SIZE[0]//3)
+
+stone_icon = pygame.Surface(ICON_SIZE, pygame.SRCALPHA)
+stone_icon.fill((80, 80, 90))
+pygame.draw.polygon(stone_icon, (190, 190, 200), [(ICON_SIZE[0]//2, 4), (ICON_SIZE[0]-4, ICON_SIZE[1]-4), (4, ICON_SIZE[1]-4)])
+
 # ===== NOVO: Carregar cursores personalizados =====
 CURSOR_SIZE = (32, 32)  # Tamanho do cursor
 
@@ -174,6 +189,9 @@ except:
     hammer_cursor = pygame.Surface(CURSOR_SIZE)
     hammer_cursor.fill((128, 128, 128))
     print("Arquivo assets/hammer.png não encontrado. Usando fallback.")
+
+# Ícone para botões de ferramenta (usa o mesmo asset do martelo por enquanto)
+tool_button_icon = pygame.transform.scale(hammer_cursor, (20, 20))
 
 # Esconde o cursor padrão do sistema
 pygame.mouse.set_visible(False)
@@ -277,12 +295,13 @@ class ScrollBar:
 
 # ===== Botões da UI =====
 menu_btn = Button(20, 20, 100, 40, "Menu", COLORS['primary'])
-hammer_btn = Button(130, 20, 100, 40, "Martelo", COLORS['danger'])
-collect_btn = Button(240, 20, 160, 40, "Cortar ($5)", COLORS['success'])
-upgrade_btn = Button(410, 20, 120, 40, "Upgrades", COLORS['gold'])
+hammer_btn = Button(130, 20, 130, 40, "Martelo", COLORS['danger'])
+collect_btn = Button(270, 20, 160, 40, "Cortar ($5)", COLORS['success'])
+pickaxe_btn = Button(440, 20, 140, 40, "Picareta ($5)", (100, 70, 30))
+upgrade_btn = Button(590, 20, 120, 40, "Upgrades", COLORS['gold'])
 
 # Painel de recursos
-resources_panel = Panel(SCREEN_WIDTH - 280, 20, 260, 280)
+resources_panel = Panel(SCREEN_WIDTH - 280, 20, 260, 360)
 
 # ----- CÂMERA COM ZOOM SUAVE -----
 camera_x = 250
@@ -356,6 +375,8 @@ def get_visible_range():
 # ----- ECONOMIA -----
 money = 10000033
 wood = 2003300
+oil = 0
+stone = 0
 
 # ===== SISTEMA DE POPULAÇÃO =====
 class PopulationSystem:
@@ -455,6 +476,75 @@ class UpgradeSystem:
 
 upgrades = UpgradeSystem()
 
+class MissionSystem:
+    def __init__(self):
+        self.missions = [
+            {"title": "Conclua 3 construcoes", "type": "build_total", "target": 3, "reward_money": 5000},
+            {"title": "Construa 1 Gerador de petroleo", "type": "build_name", "key": "Gerador de petróleo", "target": 1, "reward_money": 25000},
+            {"title": "Junte 150 de petroleo", "type": "oil", "target": 150, "reward_money": 20000},
+            {"title": "Junte 120 de pedra", "type": "stone", "target": 120, "reward_money": 35000},
+        ]
+        self.started = False
+        self.current_index = 0
+        self.last_reward_message = ""
+        self.last_reward_time = 0
+
+    def reset(self):
+        self.started = False
+        self.current_index = 0
+        self.last_reward_message = ""
+        self.last_reward_time = 0
+
+    def start(self):
+        self.started = True
+
+    def get_current_mission(self):
+        if self.current_index >= len(self.missions):
+            return None
+        return self.missions[self.current_index]
+
+    def get_progress(self, total_buildings_completed, completed_by_name, oil_amount, stone_amount):
+        mission = self.get_current_mission()
+        if mission is None:
+            return 0, 0
+
+        if mission["type"] == "build_total":
+            value = total_buildings_completed
+        elif mission["type"] == "build_name":
+            value = completed_by_name.get(mission["key"], 0)
+        elif mission["type"] == "oil":
+            value = oil_amount
+        elif mission["type"] == "stone":
+            value = stone_amount
+        else:
+            value = 0
+
+        return value, mission["target"]
+
+    def update(self, total_buildings_completed, completed_by_name, oil_amount, stone_amount):
+        global money
+
+        if not self.started:
+            return
+
+        while True:
+            mission = self.get_current_mission()
+            if mission is None:
+                break
+
+            progress, target = self.get_progress(total_buildings_completed, completed_by_name, oil_amount, stone_amount)
+            if progress < target:
+                break
+
+            money += mission["reward_money"]
+            self.last_reward_message = f"Missao concluida: +${mission['reward_money']}"
+            self.last_reward_time = pygame.time.get_ticks()
+            self.current_index += 1
+
+mission_system = MissionSystem()
+total_buildings_completed = 0
+buildings_completed_by_name = {}
+
 class FlyingIcon:
     def __init__(self, start_x, start_y, end_x, end_y, image, duration=1000):
         self.start_x = start_x
@@ -518,6 +608,27 @@ collect_start_times = {}
 cutting_sounds_playing = {}  # Dicionário para controlar sons de corte por árvore
 COLLECT_COST = 10
 
+# ----- ROCHAS (mineração de pedra) -----
+MINE_TIME = 6000       # ms para minerar uma rocha
+MINE_YIELD = 3         # pedras por rocha
+rocks = []
+occupied_by_trees = {tuple(t["pos"]) for t in trees}
+for _ in range(500):
+    attempts = 0
+    while attempts < 100:
+        x = random.randint(0, GRID_SIZE - 1)
+        y = random.randint(0, GRID_SIZE - 1)
+        if (not map_generator.is_water(x, y) and not map_generator.is_sand(x, y)
+                and (x, y) not in occupied_by_trees):
+            rocks.append({"pos": (x, y)})
+            occupied_by_trees.add((x, y))
+            break
+        attempts += 1
+del occupied_by_trees
+
+collecting_rocks = []
+collect_rock_start_times = {}
+
 # ===== SISTEMA DE CONSTRUÇÃO =====
 buildings_in_progress = []
 building_start_times = {}
@@ -527,11 +638,12 @@ buildings = {
     "Casa": {"cost_money": 20, "cost_wood": 10, "color": (0, 150, 0), "income": 1, "size": (1, 1), "population": 20, "build_time": 6000},
     "Predio": {"cost_money": 50, "cost_wood": 25, "color": (150, 0, 0), "income": 5, "size": (1, 1), "population": 200, "build_time": 10000},
     "Lojinha": {"cost_money": 270, "cost_wood": 50, "color": (0, 0, 120), "income": 27, "size": (1, 1), "population": 0, "build_time": 15000},
-    "Shopping": {"cost_money": 3000, "cost_wood": 200, "color": (120, 0, 120), "income": 670, "size": (2, 3), "population": 0, "build_time": 20000},
-    "Factory": {"cost_money": 9000, "cost_wood": 500, "color": (120, 40, 120), "income": 900, "size": (3, 3), "population": 0, "build_time": 50000},
-    "School": {"cost_money": 1500, "cost_wood": 100, "color": (255, 165, 0), "income": 370, "size": (4, 3), "population": 0, "build_time": 15000},
-    "Mall": {"cost_money": 900, "cost_wood": 90, "color": (128, 0, 128), "income": 34, "size": (3, 1), "population": 0, "build_time": 10000},
-    "Gerador de petróleo": {"cost_money": 500000, "cost_wood": 50000, "color": (40, 60, 100), "income": 350000, "size": (5, 5), "population": 0, "build_time": 300},
+    "Shopping": {"cost_money": 3000, "cost_wood": 200, "cost_stone": 50, "color": (120, 0, 120), "income": 670, "size": (2, 3), "population": 0, "build_time": 20000},
+    "Factory": {"cost_money": 9000, "cost_wood": 500, "cost_stone": 150, "color": (120, 40, 120), "income": 900, "size": (3, 3), "population": 0, "build_time": 50000},
+    "School": {"cost_money": 1500, "cost_wood": 100, "cost_stone": 80, "color": (255, 165, 0), "income": 370, "size": (4, 3), "population": 0, "build_time": 15000},
+    "Mall": {"cost_money": 900, "cost_wood": 90, "cost_stone": 30, "color": (128, 0, 128), "income": 34, "size": (3, 1), "population": 0, "build_time": 10000},
+    "Gerador de petróleo": {"cost_money": 500000, "cost_wood": 50000, "cost_stone": 500, "color": (40, 60, 100), "income": 350000, "size": (5, 5), "population": 0, "build_time": 300, "oil_output": 3},
+    "Pedreira": {"cost_money": 80000, "cost_wood": 2000, "color": (100, 100, 110), "income": 5000, "size": (2, 2), "population": 0, "build_time": 8000, "stone_output": 2},
 }
 
 grid = [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
@@ -606,6 +718,26 @@ def get_cell_at_mouse(mouse_x, mouse_y):
     gy = int(world_y // BASE_CELL_SIZE)
     return gx, gy
 
+def get_building_counts():
+    counted = set()
+    counts = {}
+
+    for y in range(GRID_SIZE):
+        for x in range(GRID_SIZE):
+            cell = grid[y][x]
+            if cell is None:
+                continue
+
+            b_id = cell["id"]
+            if b_id in counted:
+                continue
+
+            counted.add(b_id)
+            b_name = cell["name"]
+            counts[b_name] = counts.get(b_name, 0) + 1
+
+    return counts
+
 # ===== FUNÇÕES DO JOGO =====
 def can_place_building(name, gx, gy):
     width, height = buildings[name]["size"]
@@ -646,15 +778,23 @@ def can_place_building(name, gx, gy):
             for tree in trees:
                 if tree["pos"] == (x, y):
                     return False
-    
+
+    # Verifica se há rochas no local
+    for y in range(gy, gy+height):
+        for x in range(gx, gx+width):
+            for rock in rocks:
+                if rock["pos"] == (x, y):
+                    return False
+
     return True
 
 def start_construction(name, gx, gy):
-    global money, wood
+    global money, wood, stone
     width, height = buildings[name]["size"]
     
     money -= buildings[name]["cost_money"]
     wood -= buildings[name]["cost_wood"]
+    stone -= buildings[name].get("cost_stone", 0)
     
     base_time = buildings[name]["build_time"]
     multiplier = upgrades.get_construction_time_multiplier()
@@ -675,10 +815,14 @@ def start_construction(name, gx, gy):
     
     buildings_in_progress.append(construction)
     building_start_times[(gx, gy)] = pygame.time.get_ticks()
+
+    if not mission_system.started:
+        mission_system.start()
+
     build_sound.play()
 
 def complete_construction(construction):
-    global building_id_counter
+    global building_id_counter, total_buildings_completed
     building_id_counter += 1
     name = construction["name"]
     gx, gy = construction["pos"]
@@ -689,6 +833,11 @@ def complete_construction(construction):
             grid[y][x] = {"name": name, "id": building_id_counter}
     
     population_system.calculate_population(grid)
+
+    total_buildings_completed += 1
+    buildings_completed_by_name[name] = buildings_completed_by_name.get(name, 0) + 1
+    mission_system.update(total_buildings_completed, buildings_completed_by_name, oil, stone)
+
     buildings_in_progress.remove(construction)
     del building_start_times[(gx, gy)]
     
@@ -763,8 +912,9 @@ def draw_grid():
             s.fill((241, 196, 15, 100))
             screen.blit(s, cell_rect)
     
-    # 3. TERCEIRO: Desenha as árvores
+    # 3. TERCEIRO: Desenha as árvores e rochas
     draw_trees()
+    draw_rocks()
     
     # 4. QUARTO: Desenha as LINHAS DO GRID - AGORA ANTES DOS PRÉDIOS
     line_width = max(1, int(zoom * 0.8))  # linhas um pouco mais finas também ajudam
@@ -795,9 +945,6 @@ def draw_grid():
     # 5. QUINTO: Desenha construções completas (AGORA POR CIMA DO GRID)
     for x in range(start_x, end_x):
         for y in range(start_y, end_y):
-            if map_generator.is_water(x, y) or map_generator.is_sand(x, y):
-                continue
-                
             if grid[y][x] is not None:
                 building_data = grid[y][x]
                 building_name = building_data["name"]
@@ -1007,16 +1154,14 @@ def draw_preview():
     mouse_x, mouse_y = pygame.mouse.get_pos()
     gx, gy = get_cell_at_mouse(mouse_x, mouse_y)
     
-    if map_generator.is_water(gx, gy) or map_generator.is_sand(gx, gy):
-        return
-    
     width, height = buildings[selected_building]["size"]
     valid = can_place_building(selected_building, gx, gy)
     
     cost_money = buildings[selected_building]["cost_money"]
     cost_wood = buildings[selected_building]["cost_wood"]
+    cost_stone = buildings[selected_building].get("cost_stone", 0)
     
-    if valid and money >= cost_money and wood >= cost_wood:
+    if valid and money >= cost_money and wood >= cost_wood and stone >= cost_stone:
         color = (0,255,0,120)
     else:
         color = (255,0,0,120)
@@ -1029,10 +1174,68 @@ def draw_preview():
     s.fill(color)
     screen.blit(s, (screen_x, screen_y))
 
+def draw_rocks():
+    cell_size_scaled = BASE_CELL_SIZE * zoom
+    current_time = pygame.time.get_ticks()
+    start_x, start_y, end_x, end_y = get_visible_range()
+
+    for rock in rocks:
+        rx, ry = rock["pos"]
+        if rx < start_x or rx >= end_x or ry < start_y or ry >= end_y:
+            continue
+
+        screen_rx, screen_ry = world_to_screen(rx * BASE_CELL_SIZE, ry * BASE_CELL_SIZE)
+        screen_rx = round(screen_rx)
+        screen_ry = round(screen_ry)
+        cw = round(cell_size_scaled)
+        ch = round(cell_size_scaled)
+
+        # Desenha rocha como pedaços cinzas
+        cx = screen_rx + cw // 2
+        cy = screen_ry + ch // 2
+        r = max(4, round(cw * 0.28))
+        pygame.draw.circle(screen, (120, 120, 130), (cx, cy), r)
+        pygame.draw.circle(screen, (80, 80, 90), (cx, cy), r, max(1, r // 5))
+        # pequena rocha ao lado
+        r2 = max(2, round(r * 0.55))
+        pygame.draw.circle(screen, (140, 140, 150), (cx + round(r * 0.7), cy + round(r * 0.4)), r2)
+        pygame.draw.circle(screen, (80, 80, 90), (cx + round(r * 0.7), cy + round(r * 0.4)), r2, max(1, r2 // 4))
+
+        # Barra de progresso se estiver sendo minerada
+        for cr in collecting_rocks:
+            if cr["pos"] == (rx, ry):
+                start_time = collect_rock_start_times[(rx, ry)]
+                progress = min(1.0, (current_time - start_time) / MINE_TIME)
+
+                dark_overlay = pygame.Surface((cw, ch), pygame.SRCALPHA)
+                dark_overlay.fill((0, 0, 0, 80))
+                screen.blit(dark_overlay, (screen_rx, screen_ry))
+
+                bar_width = cw
+                bar_height = max(4, round(ch * 0.1))
+                bar_y = screen_ry + 5
+
+                pygame.draw.rect(screen, (40, 40, 40),
+                                 pygame.Rect(screen_rx, bar_y, bar_width, bar_height),
+                                 border_radius=bar_height // 2)
+                bar_fg_width = round(bar_width * progress)
+                if bar_fg_width > 0:
+                    bar_surf = pygame.Surface((bar_fg_width, bar_height))
+                    for i in range(bar_fg_width):
+                        t = i / bar_fg_width
+                        rr = int(180 + t * 20)
+                        gg = int(180 + t * 20)
+                        bb = int(190 + t * 20)
+                        pygame.draw.line(bar_surf, (rr, gg, bb), (i, 0), (i, bar_height))
+                    screen.blit(bar_surf, (screen_rx, bar_y))
+                break
+
+
 def draw_ui():
     menu_btn.draw(screen)
     hammer_btn.draw(screen)
     collect_btn.draw(screen)
+    pickaxe_btn.draw(screen)
     upgrade_btn.draw(screen)
     
     resources_panel.draw(screen)
@@ -1050,12 +1253,20 @@ def draw_ui():
     screen.blit(population_icon, (resources_panel.rect.x + 15, icon_y + 90))
     pop_text = font_large.render(f"{population_system.population}", True, COLORS['gold'])
     screen.blit(pop_text, (resources_panel.rect.x + 60, icon_y + 95))
+
+    screen.blit(oil_icon, (resources_panel.rect.x + 15, icon_y + 130))
+    oil_text = font_large.render(f"{oil}", True, (255, 180, 80))
+    screen.blit(oil_text, (resources_panel.rect.x + 60, icon_y + 135))
+
+    screen.blit(stone_icon, (resources_panel.rect.x + 15, icon_y + 170))
+    stone_text = font_large.render(f"{stone}", True, (200, 200, 215))
+    screen.blit(stone_text, (resources_panel.rect.x + 60, icon_y + 175))
     
     multiplier = population_system.get_income_multiplier()
     mult_text = font_small.render(f"Multiplicador: {multiplier:.2f}x", True, COLORS['gold'])
-    screen.blit(mult_text, (resources_panel.rect.x + 15, icon_y + 135))
+    screen.blit(mult_text, (resources_panel.rect.x + 15, icon_y + 215))
     
-    cut_y = icon_y + 160
+    cut_y = icon_y + 240
     cuts_text = font_small.render(f"Cortes: {len(collecting_trees)}/{upgrades.simultaneous_cuts_level}", True, (200,200,200))
     screen.blit(cuts_text, (resources_panel.rect.x + 15, cut_y))
     
@@ -1069,30 +1280,75 @@ def draw_ui():
     screen.blit(zoom_text, (resources_panel.rect.x + 15, cut_y + 60))
     
     if selected_building:
-        cost_panel = Panel(SCREEN_WIDTH - 280, 300, 260, 120, COLORS['panel'])
+        cost_panel = Panel(SCREEN_WIDTH - 280, 390, 260, 120, COLORS['panel'])
         cost_panel.draw(screen)
         
         title_text = font_small.render(f"{selected_building}", True, COLORS['gold'])
-        screen.blit(title_text, (SCREEN_WIDTH - 265, 310))
+        screen.blit(title_text, (SCREEN_WIDTH - 265, 400))
         
         cost_money = buildings[selected_building]["cost_money"]
         cost_wood = buildings[selected_building]["cost_wood"]
         build_time = int(buildings[selected_building]["build_time"] * upgrades.get_construction_time_multiplier() / 1000)
         
-        screen.blit(pygame.transform.scale(money_icon, (20, 20)), (SCREEN_WIDTH - 265, 335))
+        screen.blit(pygame.transform.scale(money_icon, (20, 20)), (SCREEN_WIDTH - 265, 425))
         money_cost_text = font_small.render(f": {cost_money}", True, (255,255,255))
-        screen.blit(money_cost_text, (SCREEN_WIDTH - 235, 337))
+        screen.blit(money_cost_text, (SCREEN_WIDTH - 235, 427))
         
-        screen.blit(pygame.transform.scale(wood_icon, (20, 20)), (SCREEN_WIDTH - 165, 335))
+        screen.blit(pygame.transform.scale(wood_icon, (20, 20)), (SCREEN_WIDTH - 165, 425))
         wood_cost_text = font_small.render(f": {cost_wood}", True, (255,255,255))
-        screen.blit(wood_cost_text, (SCREEN_WIDTH - 135, 337))
+        screen.blit(wood_cost_text, (SCREEN_WIDTH - 135, 427))
         
-        time_text = font_small.render(f"⏱️ {build_time}s", True, COLORS['gold'])
-        screen.blit(time_text, (SCREEN_WIDTH - 265, 360))
+        _cost_stone = buildings[selected_building].get("cost_stone", 0)
+        if _cost_stone > 0:
+            screen.blit(pygame.transform.scale(stone_icon, (20, 20)), (SCREEN_WIDTH - 265, 447))
+            stone_cost_text = font_small.render(f": {_cost_stone}", True, (200, 200, 215))
+            screen.blit(stone_cost_text, (SCREEN_WIDTH - 235, 449))
+        
+        time_text = font_small.render(f"Tempo: {build_time}s", True, COLORS['gold'])
+        screen.blit(time_text, (SCREEN_WIDTH - 265, 470))
         
         if buildings[selected_building]["population"] > 0:
             pop_text = font_small.render(f"+{buildings[selected_building]['population']} pop", True, COLORS['gold'])
-            screen.blit(pop_text, (SCREEN_WIDTH - 265, 380))
+            screen.blit(pop_text, (SCREEN_WIDTH - 265, 490))
+
+def draw_mission_panel():
+    mission_panel = Panel(20, SCREEN_HEIGHT - 145, 470, 120, (44, 62, 80, 220))
+    mission_panel.draw(screen)
+
+    title = font_medium.render("Metas", True, COLORS['gold'])
+    screen.blit(title, (35, SCREEN_HEIGHT - 135))
+
+    if not mission_system.started:
+        text = font_small.render("As metas começam à partir da primeira construção.", True, (220, 220, 220))
+        screen.blit(text, (35, SCREEN_HEIGHT - 105))
+        return
+
+    current = mission_system.get_current_mission()
+    if current is None:
+        text = font_small.render("Todas as metas concluídas.", True, (120, 255, 170))
+        screen.blit(text, (35, SCREEN_HEIGHT - 105))
+        return
+
+    progress, target = mission_system.get_progress(total_buildings_completed, buildings_completed_by_name, oil, stone)
+    progress = min(progress, target)
+
+    desc = font_small.render(current["title"], True, (255, 255, 255))
+    screen.blit(desc, (35, SCREEN_HEIGHT - 105))
+
+    progress_text = font_small.render(f"Progresso: {progress}/{target} | Recompensa: ${current['reward_money']}", True, (220, 220, 220))
+    screen.blit(progress_text, (35, SCREEN_HEIGHT - 82))
+
+    bar_bg = pygame.Rect(35, SCREEN_HEIGHT - 55, 430, 16)
+    pygame.draw.rect(screen, (60, 60, 60), bar_bg, border_radius=8)
+    fill_ratio = 0 if target == 0 else (progress / target)
+    fill_w = int(bar_bg.width * fill_ratio)
+    if fill_w > 0:
+        pygame.draw.rect(screen, COLORS['success'], (bar_bg.x, bar_bg.y, fill_w, bar_bg.height), border_radius=8)
+    pygame.draw.rect(screen, (220, 220, 220), bar_bg, width=1, border_radius=8)
+
+    if mission_system.last_reward_message and pygame.time.get_ticks() - mission_system.last_reward_time < 2500:
+        reward_text = font_small.render(mission_system.last_reward_message, True, (120, 255, 170))
+        screen.blit(reward_text, (250, SCREEN_HEIGHT - 135))
 
 def draw_menu():
     overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -1144,10 +1400,15 @@ def draw_menu():
             screen.blit(pygame.transform.scale(wood_icon, (15, 15)), (btn_rect.x + 80, btn_rect.y + 30))
             wood_text = font_small.render(f"{buildings[name]['cost_wood']}", True, (255,255,255))
             screen.blit(wood_text, (btn_rect.x + 100, btn_rect.y + 30))
-            
-            if buildings[name]['population'] > 0:
+
+            _cs = buildings[name].get("cost_stone", 0)
+            if _cs > 0:
+                screen.blit(pygame.transform.scale(stone_icon, (15, 15)), (btn_rect.x + 155, btn_rect.y + 30))
+                stone_lbl = font_small.render(f"{_cs}", True, (200, 200, 215))
+                screen.blit(stone_lbl, (btn_rect.x + 175, btn_rect.y + 30))
+            elif buildings[name]['population'] > 0:
                 pop_text = font_small.render(f"+{buildings[name]['population']} pop", True, COLORS['gold'])
-                screen.blit(pop_text, (btn_rect.x + 150, btn_rect.y + 30))
+                screen.blit(pop_text, (btn_rect.x + 155, btn_rect.y + 30))
             
             # Armazena a posição atualizada para clique
             menu_buttons[name] = (name, btn_rect)
@@ -1322,20 +1583,29 @@ def draw_flying_icons():
 
 # ===== RESET DO JOGO =====
 def reset_game():
-    global money, wood, grid, trees, collecting_trees, collect_start_times
+    global money, wood, oil, stone, grid, trees, collecting_trees, collect_start_times
     global cutting_sounds_playing, buildings_in_progress, building_start_times
     global building_id_counter, current_mode, selected_building, preview_active
+    global total_buildings_completed, buildings_completed_by_name
+    global rocks, collecting_rocks, collect_rock_start_times
     for ch in cutting_sounds_playing.values():
         ch.stop()
     cutting_sounds_playing.clear()
     money = 10000033
     wood = 2003300
+    oil = 0
+    stone = 0
     grid = [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
     collecting_trees.clear()
     collect_start_times.clear()
+    collecting_rocks.clear()
+    collect_rock_start_times.clear()
     buildings_in_progress.clear()
     building_start_times.clear()
     building_id_counter = 0
+    total_buildings_completed = 0
+    buildings_completed_by_name.clear()
+    mission_system.reset()
     flying_icons.clear()
     trees.clear()
     for _ in range(1000):
@@ -1345,6 +1615,19 @@ def reset_game():
             y = random.randint(0, GRID_SIZE - 1)
             if not map_generator.is_water(x, y) and not map_generator.is_sand(x, y):
                 trees.append({"pos": (x, y), "type": random.randint(0, 4)})
+                break
+            attempts += 1
+    rocks.clear()
+    _occupied = {tuple(t["pos"]) for t in trees}
+    for _ in range(500):
+        attempts = 0
+        while attempts < 100:
+            x = random.randint(0, GRID_SIZE - 1)
+            y = random.randint(0, GRID_SIZE - 1)
+            if (not map_generator.is_water(x, y) and not map_generator.is_sand(x, y)
+                    and (x, y) not in _occupied):
+                rocks.append({"pos": (x, y)})
+                _occupied.add((x, y))
                 break
             attempts += 1
     population_system.calculate_population(grid)
@@ -1462,9 +1745,14 @@ while running:
             for cell in row:
                 if cell:
                     base_income += buildings[cell["name"]]["income"]
+
+        building_counts = get_building_counts()
+        oil += building_counts.get("Gerador de petróleo", 0) * buildings["Gerador de petróleo"].get("oil_output", 0)
+        stone += building_counts.get("Pedreira", 0) * buildings["Pedreira"].get("stone_output", 0)
         
         multiplier = population_system.get_income_multiplier()
         money += int(base_income * multiplier)
+        mission_system.update(total_buildings_completed, buildings_completed_by_name, oil, stone)
         last_income_time = current_time
 
     completed_trees = []
@@ -1541,7 +1829,41 @@ while running:
             del cutting_sounds_playing[tree_pos]
         collecting_trees.remove(tree)
         del collect_start_times[tree_pos]
-    
+
+    # ----- Conclusão da mineração de rochas -----
+    completed_rocks = []
+    for cr in collecting_rocks:
+        rock_pos = cr["pos"]
+        start_time = collect_rock_start_times[rock_pos]
+        if current_time - start_time >= MINE_TIME:
+            rx, ry = rock_pos
+            start_screen_x, start_screen_y = world_to_screen(
+                rx * BASE_CELL_SIZE + BASE_CELL_SIZE / 2,
+                ry * BASE_CELL_SIZE + BASE_CELL_SIZE / 2
+            )
+            icon_y_pos = resources_panel.rect.y + 15
+            end_fx = resources_panel.rect.x + 15 + ICON_SIZE[0] // 2
+            end_fy = icon_y_pos + 170 + ICON_SIZE[1] // 2
+            for i in range(3):
+                flying_icons.append(FlyingIcon(
+                    start_screen_x + random.randint(-20, 20),
+                    start_screen_y + random.randint(-20, 20),
+                    end_fx + random.randint(-5, 5),
+                    end_fy + random.randint(-5, 5),
+                    stone_icon,
+                    duration=800 + random.randint(-100, 100)
+                ))
+            # Remove a rocha e dá pedra
+            for i, rock in enumerate(rocks):
+                if rock["pos"] == rock_pos:
+                    rocks.pop(i)
+                    stone += MINE_YIELD
+                    break
+            completed_rocks.append(cr)
+    for cr in completed_rocks:
+        collecting_rocks.remove(cr)
+        del collect_rock_start_times[cr["pos"]]
+
     completed_constructions = []
     for construction in buildings_in_progress:
         start_time = building_start_times[construction["pos"]]
@@ -1561,6 +1883,7 @@ while running:
     menu_btn.hovered = menu_btn.rect.collidepoint(mouse_x, mouse_y)
     hammer_btn.hovered = hammer_btn.rect.collidepoint(mouse_x, mouse_y)
     collect_btn.hovered = collect_btn.rect.collidepoint(mouse_x, mouse_y)
+    pickaxe_btn.hovered = pickaxe_btn.rect.collidepoint(mouse_x, mouse_y)
     upgrade_btn.hovered = upgrade_btn.rect.collidepoint(mouse_x, mouse_y)
 
     for event in pygame.event.get():
@@ -1667,6 +1990,13 @@ while running:
                         selected_building = None
                         clicked = True
 
+                    elif pickaxe_btn.rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        current_mode = "mine" if current_mode != "mine" else "none"
+                        preview_active = False
+                        selected_building = None
+                        clicked = True
+
                     elif upgrade_btn.rect.collidepoint(mouse_x, mouse_y):
                         button_sound.play()
                         if current_mode == "upgrade":
@@ -1727,9 +2057,7 @@ while running:
                     if not clicked:
                         gx, gy = get_cell_at_mouse(mouse_x, mouse_y)
                         if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE:
-                            if map_generator.is_water(gx, gy) or map_generator.is_sand(gx, gy):
-                                pass
-                            elif current_mode == "collect":
+                            if current_mode == "collect":
                                 if len(collecting_trees) < upgrades.simultaneous_cuts_level:
                                     for tree in trees:
                                         if tree["pos"] == (gx, gy) and money >= COLLECT_COST:
@@ -1748,6 +2076,14 @@ while running:
                                     popup_message = f"Limite de cortes atingido! ({upgrades.simultaneous_cuts_level}/{upgrades.simultaneous_cuts_level})"
                                     popup_start_time = pygame.time.get_ticks()
                                     button_sound.play()
+                            elif current_mode == "mine":
+                                for rock in rocks:
+                                    if rock["pos"] == (gx, gy):
+                                        already_mining = any(cr["pos"] == (gx, gy) for cr in collecting_rocks)
+                                        if not already_mining:
+                                            collecting_rocks.append(rock)
+                                            collect_rock_start_times[(gx, gy)] = pygame.time.get_ticks()
+                                        break
                             elif current_mode == "demolish":
                                 demolish_building(gx, gy)
                             elif selected_building and current_mode == "none":
@@ -1767,12 +2103,12 @@ while running:
 
                 if event.button == 1 and preview_active:
                     gx, gy = get_cell_at_mouse(mouse_x, mouse_y)
-                    if not (map_generator.is_water(gx, gy) or map_generator.is_sand(gx, gy)):
-                        cost_money = buildings[selected_building]["cost_money"]
-                        cost_wood = buildings[selected_building]["cost_wood"]
-                        if (can_place_building(selected_building, gx, gy) and
-                                money >= cost_money and wood >= cost_wood):
-                            start_construction(selected_building, gx, gy)
+                    cost_money = buildings[selected_building]["cost_money"]
+                    cost_wood = buildings[selected_building]["cost_wood"]
+                    cost_stone_req = buildings[selected_building].get("cost_stone", 0)
+                    if (can_place_building(selected_building, gx, gy) and
+                            money >= cost_money and wood >= cost_wood and stone >= cost_stone_req):
+                        start_construction(selected_building, gx, gy)
                     preview_active = False
 
         if event.type == pygame.MOUSEMOTION:
@@ -1802,12 +2138,14 @@ while running:
         menu_btn.active = (current_mode == "menu")
         hammer_btn.active = (current_mode == "demolish")
         collect_btn.active = (current_mode == "collect")
+        pickaxe_btn.active = (current_mode == "mine")
         upgrade_btn.active = (current_mode == "upgrade")
 
         draw_grid()
         if preview_active:
             draw_preview()
         draw_ui()
+        draw_mission_panel()
         draw_flying_icons()
 
         if current_mode == "menu":
