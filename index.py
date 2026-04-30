@@ -102,19 +102,22 @@ building_images_original["Factory"] = pygame.image.load("assets/factory-game.png
 building_images_original["School"] = pygame.image.load("assets/school.png").convert_alpha()
 building_images_original["Mall"] = pygame.image.load("assets/mall.png").convert_alpha()
 
-# Imagem temporária do Gerador de Petróleo (retângulo colorido)
-oil_gen_placeholder = pygame.Surface((BASE_CELL_SIZE, BASE_CELL_SIZE), pygame.SRCALPHA)
-pygame.draw.rect(oil_gen_placeholder, (40, 60, 100), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE))
-pygame.draw.circle(oil_gen_placeholder, (255, 140, 0), (BASE_CELL_SIZE//2, BASE_CELL_SIZE//2), BASE_CELL_SIZE//4)
-pygame.draw.rect(oil_gen_placeholder, (100, 150, 200), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE), width=3)
-building_images_original["Gerador de petróleo"] = oil_gen_placeholder
+try:
+    oil_gen_img = pygame.image.load("assets/GeradorPetroleo.png").convert_alpha()
+except:
+    oil_gen_img = pygame.Surface((BASE_CELL_SIZE, BASE_CELL_SIZE), pygame.SRCALPHA)
+    pygame.draw.rect(oil_gen_img, (40, 60, 100), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE))
+    pygame.draw.circle(oil_gen_img, (255, 140, 0), (BASE_CELL_SIZE//2, BASE_CELL_SIZE//2), BASE_CELL_SIZE//4)
+    print("Arquivo assets/gerador-petroleo.png não encontrado. Usando fallback.")
+building_images_original["Gerador de petróleo"] = oil_gen_img
 
-# Imagem temporária da Pedreira
-stone_quarry_placeholder = pygame.Surface((BASE_CELL_SIZE, BASE_CELL_SIZE), pygame.SRCALPHA)
-pygame.draw.rect(stone_quarry_placeholder, (100, 100, 110), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE))
-pygame.draw.polygon(stone_quarry_placeholder, (170, 170, 180), [(BASE_CELL_SIZE//2, 6), (BASE_CELL_SIZE-6, BASE_CELL_SIZE-8), (6, BASE_CELL_SIZE-8)])
-pygame.draw.rect(stone_quarry_placeholder, (210, 210, 220), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE), width=3)
-building_images_original["Pedreira"] = stone_quarry_placeholder
+try:
+    mina_img = pygame.image.load("assets/mina.png").convert_alpha()
+except:
+    mina_img = pygame.Surface((BASE_CELL_SIZE, BASE_CELL_SIZE), pygame.SRCALPHA)
+    pygame.draw.rect(mina_img, (100, 100, 110), (0, 0, BASE_CELL_SIZE, BASE_CELL_SIZE))
+    print("Arquivo assets/mina.png não encontrado. Usando fallback.")
+building_images_original["Mina"] = mina_img
 
 # ===== NOVO: Configuração do FPS =====
 show_fps = True
@@ -163,13 +166,29 @@ except:
     population_icon.fill((255, 215, 0))
     print("Arquivo assets/population.png não encontrado. Usando fallback.")
 
-oil_icon = pygame.Surface(ICON_SIZE, pygame.SRCALPHA)
-oil_icon.fill((30, 30, 30))
-pygame.draw.circle(oil_icon, (255, 140, 0), (ICON_SIZE[0]//2, ICON_SIZE[1]//2), ICON_SIZE[0]//3)
+try:
+    oil_icon = pygame.image.load("assets/petroleo.png").convert_alpha()
+    oil_icon = pygame.transform.scale(oil_icon, ICON_SIZE)
+except:
+    oil_icon = pygame.Surface(ICON_SIZE, pygame.SRCALPHA)
+    oil_icon.fill((30, 30, 30))
+    pygame.draw.circle(oil_icon, (255, 140, 0), (ICON_SIZE[0]//2, ICON_SIZE[1]//2), ICON_SIZE[0]//3)
+    print("Arquivo assets/petroleo.png não encontrado. Usando fallback.")
 
-stone_icon = pygame.Surface(ICON_SIZE, pygame.SRCALPHA)
-stone_icon.fill((80, 80, 90))
-pygame.draw.polygon(stone_icon, (190, 190, 200), [(ICON_SIZE[0]//2, 4), (ICON_SIZE[0]-4, ICON_SIZE[1]-4), (4, ICON_SIZE[1]-4)])
+try:
+    stone_icon = pygame.image.load("assets/pedra.png").convert_alpha()
+    stone_icon = pygame.transform.scale(stone_icon, ICON_SIZE)
+except:
+    stone_icon = pygame.Surface(ICON_SIZE, pygame.SRCALPHA)
+    stone_icon.fill((80, 80, 90))
+    pygame.draw.polygon(stone_icon, (190, 190, 200), [(ICON_SIZE[0]//2, 4), (ICON_SIZE[0]-4, ICON_SIZE[1]-4), (4, ICON_SIZE[1]-4)])
+    print("Arquivo assets/pedra.png não encontrado. Usando fallback.")
+
+try:
+    rock_img = pygame.image.load("assets/pedra.png").convert_alpha()
+except:
+    rock_img = None
+    print("Arquivo assets/pedra.png não encontrado. Rocks usarão fallback.")
 
 # ===== NOVO: Carregar cursores personalizados =====
 CURSOR_SIZE = (32, 32)  # Tamanho do cursor
@@ -189,6 +208,14 @@ except:
     hammer_cursor = pygame.Surface(CURSOR_SIZE)
     hammer_cursor.fill((128, 128, 128))
     print("Arquivo assets/hammer.png não encontrado. Usando fallback.")
+
+try:
+    pickaxe_cursor = pygame.image.load("assets/picareta.png").convert_alpha()
+    pickaxe_cursor = pygame.transform.scale(pickaxe_cursor, CURSOR_SIZE)
+except:
+    pickaxe_cursor = pygame.Surface(CURSOR_SIZE)
+    pickaxe_cursor.fill((100, 70, 30))
+    print("Arquivo assets/picareta.png não encontrado. Usando fallback.")
 
 # Ícone para botões de ferramenta (usa o mesmo asset do martelo por enquanto)
 tool_button_icon = pygame.transform.scale(hammer_cursor, (20, 20))
@@ -373,8 +400,8 @@ def get_visible_range():
     return start_x, start_y, end_x, end_y
 
 # ----- ECONOMIA -----
-money = 10000033
-wood = 2003300
+money = 1000
+wood = 0
 oil = 0
 stone = 0
 
@@ -412,7 +439,7 @@ class UpgradeSystem:
     def __init__(self):
         # Upgrade de cortes simultâneos
         self.simultaneous_cuts_level = 1
-        self.max_simultaneous_cuts = 5
+        self.max_simultaneous_cuts_level = 5
         self.simultaneous_cuts_cost = [500, 5000, 50000, 500000, 5000000]
         
         # Upgrade de tempo de corte
@@ -436,7 +463,7 @@ class UpgradeSystem:
         return 1.0 - self.construction_time_reduction[self.construction_time_level - 1]
     
     def can_upgrade_simultaneous(self):
-        return (self.simultaneous_cuts_level < self.max_simultaneous_cuts and 
+        return (self.simultaneous_cuts_level < self.max_simultaneous_cuts_level and 
                 money >= self.simultaneous_cuts_cost[self.simultaneous_cuts_level])
     
     def can_upgrade_cut_time(self):
@@ -474,15 +501,30 @@ class UpgradeSystem:
             return True
         return False
 
+    def max_all(self):
+        """Cheat: leva todos os upgrades ao nível máximo."""
+        for attr, value in self.__dict__.items():
+            if attr.startswith("max_"):
+                level_attr = attr[len("max_"):]
+                if level_attr in self.__dict__:
+                    self.__dict__[level_attr] = value
+
 upgrades = UpgradeSystem()
 
 class MissionSystem:
     def __init__(self):
         self.missions = [
-            {"title": "Conclua 3 construcoes", "type": "build_total", "target": 3, "reward_money": 5000},
-            {"title": "Construa 1 Gerador de petroleo", "type": "build_name", "key": "Gerador de petróleo", "target": 1, "reward_money": 25000},
-            {"title": "Junte 150 de petroleo", "type": "oil", "target": 150, "reward_money": 20000},
-            {"title": "Junte 120 de pedra", "type": "stone", "target": 120, "reward_money": 35000},
+            {"title": "Conclua 3 construcoes", "type": "build_total", "target": 3, "reward_money": 500},
+            {"title": "Construa uma Lojinha", "type": "build_name", "key": "Lojinha", "target": 1, "reward_money": 800},
+            {"title": "Junte 30 de madeira", "type": "wood", "target": 30, "reward_money": 600},
+            {"title": "Junte 20 de pedra", "type": "stone", "target": 20, "reward_money": 700},
+            {"title": "Construa 5 Casas", "type": "build_name", "key": "Casa", "target": 5, "reward_money": 1500},
+            {"title": "Construa uma School", "type": "build_name", "key": "School", "target": 1, "reward_money": 2500},
+            {"title": "Construa um Mall", "type": "build_name", "key": "Mall", "target": 1, "reward_money": 3000},
+            {"title": "Junte 100 de pedra", "type": "stone", "target": 100, "reward_money": 4000},
+            {"title": "Construa uma Factory", "type": "build_name", "key": "Factory", "target": 1, "reward_money": 5000},
+            {"title": "Junte 200 de petroleo", "type": "oil", "target": 200, "reward_money": 10000},
+            {"title": "Construa um Gerador de petroleo", "type": "build_name", "key": "Gerador de petróleo", "target": 1, "reward_money": 30000},
         ]
         self.started = False
         self.current_index = 0
@@ -503,7 +545,7 @@ class MissionSystem:
             return None
         return self.missions[self.current_index]
 
-    def get_progress(self, total_buildings_completed, completed_by_name, oil_amount, stone_amount):
+    def get_progress(self, total_buildings_completed, completed_by_name, oil_amount, stone_amount, wood_amount=0):
         mission = self.get_current_mission()
         if mission is None:
             return 0, 0
@@ -516,12 +558,14 @@ class MissionSystem:
             value = oil_amount
         elif mission["type"] == "stone":
             value = stone_amount
+        elif mission["type"] == "wood":
+            value = wood_amount
         else:
             value = 0
 
         return value, mission["target"]
 
-    def update(self, total_buildings_completed, completed_by_name, oil_amount, stone_amount):
+    def update(self, total_buildings_completed, completed_by_name, oil_amount, stone_amount, wood_amount=0):
         global money
 
         if not self.started:
@@ -532,7 +576,7 @@ class MissionSystem:
             if mission is None:
                 break
 
-            progress, target = self.get_progress(total_buildings_completed, completed_by_name, oil_amount, stone_amount)
+            progress, target = self.get_progress(total_buildings_completed, completed_by_name, oil_amount, stone_amount, wood_amount)
             if progress < target:
                 break
 
@@ -544,6 +588,62 @@ class MissionSystem:
 mission_system = MissionSystem()
 total_buildings_completed = 0
 buildings_completed_by_name = {}
+
+
+# ===== BOT PLAYER =====
+class BotPlayer:
+    """Bot simulado com recursos que crescem passivamente ao longo do tempo."""
+    def __init__(self, name="BOT-7"):
+        self.name = name
+        self.money  = random.randint(800, 1200)
+        self.wood   = random.randint(0, 20)
+        self.stone  = random.randint(0, 10)
+        self.oil    = 0
+        self.population = random.randint(0, 8)
+
+        # taxas de ganho por segundo (crescem ligeiramente com o tempo)
+        self._income      = random.uniform(0.8, 2.0)
+        self._wood_rate   = random.uniform(0.3, 0.8)
+        self._stone_rate  = random.uniform(0.1, 0.4)
+        self._oil_rate    = 0.0
+        self._pop_rate    = random.uniform(0.02, 0.06)
+
+        self._last_tick   = pygame.time.get_ticks()
+        self._phase_timer = 0   # ms acumulados para avançar de fase
+
+    def tick(self, current_time):
+        elapsed = (current_time - self._last_tick) / 1000.0
+        self._last_tick = current_time
+        self._phase_timer += current_time - (current_time - int(elapsed * 1000))
+
+        # Aplica ganhos
+        self.money     += self._income     * elapsed
+        self.wood      += self._wood_rate  * elapsed
+        self.stone     += self._stone_rate * elapsed
+        self.oil       += self._oil_rate   * elapsed
+        self.population = max(0, self.population + self._pop_rate * elapsed)
+
+        # A cada 30 s o bot "cresce" um pouco
+        self._phase_timer += int(elapsed * 1000)
+        if self._phase_timer >= 30_000:
+            self._phase_timer -= 30_000
+            self._income    *= random.uniform(1.05, 1.15)
+            self._wood_rate *= random.uniform(1.02, 1.08)
+            self._stone_rate*= random.uniform(1.02, 1.08)
+            if self.money > 50_000 and self._oil_rate == 0:
+                self._oil_rate = random.uniform(0.05, 0.2)
+
+    # inteiros para exibição
+    def fmt_money(self):   return int(self.money)
+    def fmt_wood(self):    return int(self.wood)
+    def fmt_stone(self):   return int(self.stone)
+    def fmt_oil(self):     return int(self.oil)
+    def fmt_pop(self):     return int(self.population)
+
+
+bot = BotPlayer()
+show_bot_panel = False      # abre/fecha com botão
+
 
 class FlyingIcon:
     def __init__(self, start_x, start_y, end_x, end_y, image, duration=1000):
@@ -643,7 +743,7 @@ buildings = {
     "School": {"cost_money": 1500, "cost_wood": 100, "cost_stone": 80, "color": (255, 165, 0), "income": 370, "size": (4, 3), "population": 0, "build_time": 15000},
     "Mall": {"cost_money": 900, "cost_wood": 90, "cost_stone": 30, "color": (128, 0, 128), "income": 34, "size": (3, 1), "population": 0, "build_time": 10000},
     "Gerador de petróleo": {"cost_money": 500000, "cost_wood": 50000, "cost_stone": 500, "color": (40, 60, 100), "income": 350000, "size": (5, 5), "population": 0, "build_time": 300, "oil_output": 3},
-    "Pedreira": {"cost_money": 80000, "cost_wood": 2000, "color": (100, 100, 110), "income": 5000, "size": (2, 2), "population": 0, "build_time": 8000, "stone_output": 2},
+    "Mina": {"cost_money": 80000, "cost_wood": 2000, "color": (100, 100, 110), "income": 5000, "size": (2, 2), "population": 0, "build_time": 8000, "stone_output": 2},
 }
 
 grid = [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
@@ -680,6 +780,9 @@ pause_resume_btn  = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 - 120, _bw
 pause_newgame_btn = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 - 35,  _bw, _bh, "Novo Jogo", COLORS['primary'])
 pause_options_btn = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 50,  _bw, _bh, "Opções",    COLORS['warning'])
 pause_quit_btn    = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 135, _bw, _bh, "Sair",      COLORS['danger'])
+
+# Botão para abrir/fechar painel do bot (canto inferior direito)
+bot_btn = Button(SCREEN_WIDTH - 140, SCREEN_HEIGHT - 55, 130, 40, "BOT-7", COLORS['danger'])
 
 # ===== FUNÇÕES DE CÂMERA E ZOOM =====
 def world_to_screen(world_x, world_y):
@@ -836,7 +939,7 @@ def complete_construction(construction):
 
     total_buildings_completed += 1
     buildings_completed_by_name[name] = buildings_completed_by_name.get(name, 0) + 1
-    mission_system.update(total_buildings_completed, buildings_completed_by_name, oil, stone)
+    mission_system.update(total_buildings_completed, buildings_completed_by_name, oil, stone, wood)
 
     buildings_in_progress.remove(construction)
     del building_start_times[(gx, gy)]
@@ -882,13 +985,13 @@ def draw_grid():
                 pygame.draw.rect(screen, water_color, rect)
             elif map_generator.is_sand(x, y):
                 pygame.draw.rect(screen, SAND_COLOR, rect)
-            elif grid[y][x] is None:
+            else:
                 is_construction = False
                 for construction in buildings_in_progress:
                     if (x, y) in construction["cells"]:
                         is_construction = True
                         break
-                
+
                 if not is_construction:
                     pygame.draw.rect(screen, GRASS_COLOR, rect)
     
@@ -1190,16 +1293,19 @@ def draw_rocks():
         cw = round(cell_size_scaled)
         ch = round(cell_size_scaled)
 
-        # Desenha rocha como pedaços cinzas
-        cx = screen_rx + cw // 2
-        cy = screen_ry + ch // 2
-        r = max(4, round(cw * 0.28))
-        pygame.draw.circle(screen, (120, 120, 130), (cx, cy), r)
-        pygame.draw.circle(screen, (80, 80, 90), (cx, cy), r, max(1, r // 5))
-        # pequena rocha ao lado
-        r2 = max(2, round(r * 0.55))
-        pygame.draw.circle(screen, (140, 140, 150), (cx + round(r * 0.7), cy + round(r * 0.4)), r2)
-        pygame.draw.circle(screen, (80, 80, 90), (cx + round(r * 0.7), cy + round(r * 0.4)), r2, max(1, r2 // 4))
+        # Desenha rocha
+        if rock_img is not None:
+            scaled_rock = pygame.transform.scale(rock_img, (cw, ch))
+            screen.blit(scaled_rock, (screen_rx, screen_ry))
+        else:
+            cx = screen_rx + cw // 2
+            cy = screen_ry + ch // 2
+            r = max(4, round(cw * 0.28))
+            pygame.draw.circle(screen, (120, 120, 130), (cx, cy), r)
+            pygame.draw.circle(screen, (80, 80, 90), (cx, cy), r, max(1, r // 5))
+            r2 = max(2, round(r * 0.55))
+            pygame.draw.circle(screen, (140, 140, 150), (cx + round(r * 0.7), cy + round(r * 0.4)), r2)
+            pygame.draw.circle(screen, (80, 80, 90), (cx + round(r * 0.7), cy + round(r * 0.4)), r2, max(1, r2 // 4))
 
         # Barra de progresso se estiver sendo minerada
         for cr in collecting_rocks:
@@ -1350,6 +1456,7 @@ def draw_mission_panel():
         reward_text = font_small.render(mission_system.last_reward_message, True, (120, 255, 170))
         screen.blit(reward_text, (250, SCREEN_HEIGHT - 135))
 
+
 def draw_menu():
     overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
     overlay.fill((0, 0, 0, 128))
@@ -1441,7 +1548,7 @@ def draw_upgrade_menu():
     
     y = SCREEN_HEIGHT//2 - 180
     
-    if upgrades.simultaneous_cuts_level < upgrades.max_simultaneous_cuts:
+    if upgrades.simultaneous_cuts_level < upgrades.max_simultaneous_cuts_level:
         color = COLORS['success'] if money >= upgrades.simultaneous_cuts_cost[upgrades.simultaneous_cuts_level] else (100,100,100)
     else:
         color = (80,80,80)
@@ -1450,7 +1557,7 @@ def draw_upgrade_menu():
     pygame.draw.rect(screen, color, sim_rect, border_radius=10)
     pygame.draw.rect(screen, COLORS['gold'], sim_rect, width=2, border_radius=10)
     
-    if upgrades.simultaneous_cuts_level < upgrades.max_simultaneous_cuts:
+    if upgrades.simultaneous_cuts_level < upgrades.max_simultaneous_cuts_level:
         text1 = font_small.render(f"Cortes Simultâneos: {upgrades.simultaneous_cuts_level} → {upgrades.simultaneous_cuts_level + 1}", True, (255,255,255))
         screen.blit(text1, (SCREEN_WIDTH//2 - 190, y + 5))
         
@@ -1520,6 +1627,9 @@ def draw_custom_cursor(screen, mouse_x, mouse_y):
         # Desenha cursor de machado
         cursor_rect = axe_cursor.get_rect(center=(mouse_x, mouse_y))
         screen.blit(axe_cursor, cursor_rect)
+    elif current_mode == "mine":
+        cursor_rect = pickaxe_cursor.get_rect(center=(mouse_x, mouse_y))
+        screen.blit(pickaxe_cursor, cursor_rect)
     elif current_mode == "demolish":
         # Desenha cursor de martelo
         cursor_rect = hammer_cursor.get_rect(center=(mouse_x, mouse_y))
@@ -1591,8 +1701,8 @@ def reset_game():
     for ch in cutting_sounds_playing.values():
         ch.stop()
     cutting_sounds_playing.clear()
-    money = 10000033
-    wood = 2003300
+    money = 1000
+    wood = 0
     oil = 0
     stone = 0
     grid = [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
@@ -1686,6 +1796,68 @@ def draw_pause_menu():
     draw_custom_cursor(screen, mx, my)
 
 
+# ===== PAINEL DO BOT =====
+def draw_bot_panel():
+    """Painel flutuante com os recursos do bot simulado."""
+    PW, PH = 230, 230
+    PX = 10
+    PY = 20
+
+    # fundo
+    surf = pygame.Surface((PW, PH), pygame.SRCALPHA)
+    pygame.draw.rect(surf, (25, 35, 55, 215), surf.get_rect(), border_radius=14)
+    screen.blit(surf, (PX, PY))
+    pygame.draw.rect(screen, (231, 76, 60), pygame.Rect(PX, PY, PW, PH), width=2, border_radius=14)
+
+    # cabeçalho
+    header_surf = pygame.Surface((PW, 32), pygame.SRCALPHA)
+    pygame.draw.rect(header_surf, (231, 76, 60, 200), header_surf.get_rect(), border_radius=14)
+    screen.blit(header_surf, (PX, PY))
+
+    # ícone de robô (primitivas)
+    rx, ry = PX + 18, PY + 8
+    pygame.draw.rect(screen, (200, 200, 210), (rx, ry + 2, 14, 12), border_radius=3)
+    pygame.draw.rect(screen, (100, 100, 120), (rx + 2, ry + 4, 3, 3))
+    pygame.draw.rect(screen, (100, 100, 120), (rx + 9, ry + 4, 3, 3))
+    pygame.draw.line(screen, (200, 200, 210), (rx + 7, ry), (rx + 7, ry + 2), 2)
+    pygame.draw.rect(screen, (150, 150, 160), (rx + 3, ry + 9, 8, 2))
+
+    title = font_medium.render(bot.name, True, (255, 255, 255))
+    screen.blit(title, (PX + 38, PY + 7))
+
+    # recursos
+    row_h = 38
+    items = [
+        (money_icon,     f"${bot.fmt_money():,}",  (255, 230, 100)),
+        (wood_icon,      str(bot.fmt_wood()),        (180, 255, 150)),
+        (stone_icon,     str(bot.fmt_stone()),       (200, 200, 220)),
+        (oil_icon,       str(bot.fmt_oil()),         (255, 180,  80)),
+        (population_icon,str(bot.fmt_pop()),         (120, 210, 255)),
+    ]
+
+    for i, (icon, text, color) in enumerate(items):
+        iy = PY + 38 + i * row_h
+        # fundo alternado suave
+        if i % 2 == 0:
+            row_bg = pygame.Surface((PW - 8, row_h - 4), pygame.SRCALPHA)
+            pygame.draw.rect(row_bg, (255, 255, 255, 15), row_bg.get_rect(), border_radius=6)
+            screen.blit(row_bg, (PX + 4, iy + 2))
+
+        small_icon = pygame.transform.scale(icon, (26, 26))
+        screen.blit(small_icon, (PX + 12, iy + 6))
+        val_surf = font_medium.render(text, True, color)
+        screen.blit(val_surf, (PX + 46, iy + 10))
+
+    # botão fechar (X) no canto do painel
+    close_x = PX + PW - 22
+    close_y = PY + 6
+    pygame.draw.circle(screen, (180, 50, 40), (close_x, close_y + 8), 9)
+    cx_text = font_small.render("X", True, (255, 255, 255))
+    screen.blit(cx_text, cx_text.get_rect(center=(close_x, close_y + 8)))
+
+    return pygame.Rect(close_x - 9, close_y, 18, 18)   # rect do botão fechar
+
+
 def draw_options_screen():
     is_from_game = (options_from == "game")
     if not is_from_game:
@@ -1748,12 +1920,15 @@ while running:
 
         building_counts = get_building_counts()
         oil += building_counts.get("Gerador de petróleo", 0) * buildings["Gerador de petróleo"].get("oil_output", 0)
-        stone += building_counts.get("Pedreira", 0) * buildings["Pedreira"].get("stone_output", 0)
+        stone += building_counts.get("Mina", 0) * buildings["Mina"].get("stone_output", 0)
         
         multiplier = population_system.get_income_multiplier()
         money += int(base_income * multiplier)
-        mission_system.update(total_buildings_completed, buildings_completed_by_name, oil, stone)
+        mission_system.update(total_buildings_completed, buildings_completed_by_name, oil, stone, wood)
         last_income_time = current_time
+
+    # Bot tick (roda todo frame, não só no tick de renda)
+    bot.tick(current_time)
 
     completed_trees = []
 
@@ -1885,6 +2060,7 @@ while running:
     collect_btn.hovered = collect_btn.rect.collidepoint(mouse_x, mouse_y)
     pickaxe_btn.hovered = pickaxe_btn.rect.collidepoint(mouse_x, mouse_y)
     upgrade_btn.hovered = upgrade_btn.rect.collidepoint(mouse_x, mouse_y)
+    bot_btn.hovered = bot_btn.rect.collidepoint(mouse_x, mouse_y)
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -1893,6 +2069,13 @@ while running:
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_F11:
                 pygame.display.toggle_fullscreen()
+            elif event.key == pygame.K_q and game_state == "playing":
+                money += 999999
+                wood += 9999
+                stone += 9999
+                oil += 9999
+            elif event.key == pygame.K_w and game_state == "playing":
+                upgrades.max_all()
             elif event.key == pygame.K_ESCAPE:
                 if game_state == "playing":
                     game_state = "paused"
@@ -1966,7 +2149,12 @@ while running:
                 elif game_state == "playing":
                     clicked = False
 
-                    if menu_btn.rect.collidepoint(mouse_x, mouse_y):
+                    if bot_btn.rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        show_bot_panel = not show_bot_panel
+                        clicked = True
+
+                    elif menu_btn.rect.collidepoint(mouse_x, mouse_y):
                         button_sound.play()
                         if current_mode == "menu":
                             current_mode = "none"
@@ -2147,6 +2335,17 @@ while running:
         draw_ui()
         draw_mission_panel()
         draw_flying_icons()
+
+        # Botão do bot (sempre visível durante o jogo)
+        bot_btn.active = show_bot_panel
+        bot_btn.draw(screen)
+
+        # Painel do bot
+        if show_bot_panel:
+            _close_rect = draw_bot_panel()
+            # clique no X dentro do painel fecha
+            if pygame.mouse.get_pressed()[0] and _close_rect.collidepoint(mouse_x, mouse_y):
+                show_bot_panel = False
 
         if current_mode == "menu":
             draw_menu()
