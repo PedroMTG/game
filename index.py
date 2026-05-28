@@ -2,6 +2,9 @@ import pygame
 import sys
 import random
 import math
+import json
+import os
+from datetime import datetime
 
 # 🔊 CONFIGURAÇÃO DE ÁUDIO
 pygame.mixer.pre_init(44100, -16, 2, 512)
@@ -190,6 +193,15 @@ except:
     rock_img = None
     print("Arquivo assets/pedra.png não encontrado. Rocks usarão fallback.")
 
+# ===== IMAGEM DO BOT =====
+try:
+    bot_image = pygame.image.load("assets/bot.png").convert_alpha()
+    bot_image = pygame.transform.scale(bot_image, (80, 80))
+except Exception as e:
+    bot_image = pygame.Surface((80, 80), pygame.SRCALPHA)
+    pygame.draw.circle(bot_image, (255, 50, 50), (40, 40), 35)
+    pygame.draw.rect(bot_image, (200, 200, 200), (25, 30, 30, 35))
+
 # ===== NOVO: Carregar cursores personalizados =====
 CURSOR_SIZE = (32, 32)  # Tamanho do cursor
 
@@ -220,8 +232,8 @@ except:
 # Ícone para botões de ferramenta (usa o mesmo asset do martelo por enquanto)
 tool_button_icon = pygame.transform.scale(hammer_cursor, (20, 20))
 
-# Esconde o cursor padrão do sistema
-pygame.mouse.set_visible(False)
+# Mostra o cursor padrão do sistema (ainda desenharemos o customizado por cima)
+pygame.mouse.set_visible(True)
 # ================================================
 
 # ===== Classe Button para botões estilizados =====
@@ -339,6 +351,7 @@ zoom = 1.0
 target_zoom = 1.0
 dragging = False
 last_mouse_pos = (0, 0)
+bot_initial_pan_done = False  # Rastreia se já fez o pan inicial para mostrar o bot
 
 # ===== Gerador de mapa orgânico =====
 class MapGenerator:
@@ -400,23 +413,41 @@ def get_visible_range():
     return start_x, start_y, end_x, end_y
 
 # ----- ECONOMIA -----
+# JOGADOR
 money = 1000
 wood = 0
 oil = 0
 stone = 0
 
-# ===== SISTEMA DE POPULAÇÃO =====
+# BOT (IA COMPETIDORA)
+bot_money = 1000
+bot_wood = 100  # Recursos iniciais para começar a colher
+bot_oil = 0
+bot_stone = 100  # Recursos iniciais
+bot_buildings_completed_by_name = {}  # Similar ao jogador
+bot_building_id_counter = 0
+bot_total_buildings_completed = 0
+bot_collecting_trees = []  # Árvores que o bot está coletando
+bot_collecting_rocks = []  # Rochas que o bot está coletando
+bot_collect_start_times = {}  # Rastreador de tempo de coleta
+
+# Sistemas de população SEPARADOS
 class PopulationSystem:
-    def __init__(self):
+    def __init__(self, owner="player"):
         self.population = 0
+        self.owner = owner  # "player" ou "bot"
         
-    def calculate_population(self, grid):
+    def calculate_population(self, grid, owner="player"):
         total = 0
         counted_buildings = set()
         
         for y in range(GRID_SIZE):
             for x in range(GRID_SIZE):
                 if grid[y][x] is not None:
+                    # Verifica se o prédio pertence a este owner
+                    if grid[y][x].get("owner", "player") != owner:
+                        continue
+                    
                     building_id = grid[y][x]["id"]
                     if building_id not in counted_buildings:
                         building_name = grid[y][x]["name"]
@@ -432,7 +463,8 @@ class PopulationSystem:
     def get_income_multiplier(self):
         return 1.0 + (self.population * 0.01)
 
-population_system = PopulationSystem()
+population_system = PopulationSystem(owner="player")
+bot_population_system = PopulationSystem(owner="bot")
 
 # ===== SISTEMA DE UPGRADES =====
 class UpgradeSystem:
@@ -510,6 +542,7 @@ class UpgradeSystem:
                     self.__dict__[level_attr] = value
 
 upgrades = UpgradeSystem()
+bot_upgrades = UpgradeSystem()  # Bot tem seus próprios upgrades
 
 class MissionSystem:
     def __init__(self):
@@ -643,6 +676,10 @@ class BotPlayer:
 
 bot = BotPlayer()
 show_bot_panel = False      # abre/fecha com botão
+bot_panel_x = 10            # posição arrastável
+bot_panel_y = 20
+bot_panel_dragging = False
+bot_panel_drag_offset = (0, 0)
 
 
 class FlyingIcon:
@@ -687,12 +724,26 @@ class FlyingIcon:
 # Lista para armazenar ícones voadores
 flying_icons = []
 
-# ----- ÁRVORES -----
+# ----- ÁRVORES (METADE DO JOGADOR: x 0-74) -----
 trees = []
-for _ in range(1000):
+for _ in range(500):  # Reduzido porque agora está dividido com bot
     attempts = 0
     while attempts < 100:
-        x = random.randint(0, GRID_SIZE-1)
+        x = random.randint(0, 74)  # Apenas metade do jogador
+        y = random.randint(0, GRID_SIZE-1)
+        if not map_generator.is_water(x, y) and not map_generator.is_sand(x, y):
+            trees.append({
+                "pos": (x, y),
+                "type": random.randint(0, 4)
+            })
+            break
+        attempts += 1
+
+# ----- ÁRVORES (METADE DO BOT: x 75-149) -----
+for _ in range(500):  # Mesma quantidade para o bot
+    attempts = 0
+    while attempts < 100:
+        x = random.randint(75, GRID_SIZE-1)  # Apenas metade do bot
         y = random.randint(0, GRID_SIZE-1)
         if not map_generator.is_water(x, y) and not map_generator.is_sand(x, y):
             trees.append({
@@ -713,10 +764,25 @@ MINE_TIME = 6000       # ms para minerar uma rocha
 MINE_YIELD = 3         # pedras por rocha
 rocks = []
 occupied_by_trees = {tuple(t["pos"]) for t in trees}
-for _ in range(500):
+
+# ROCHAS (METADE DO JOGADOR: x 0-74)
+for _ in range(250):
     attempts = 0
     while attempts < 100:
-        x = random.randint(0, GRID_SIZE - 1)
+        x = random.randint(0, 74)  # Apenas metade do jogador
+        y = random.randint(0, GRID_SIZE - 1)
+        if (not map_generator.is_water(x, y) and not map_generator.is_sand(x, y)
+                and (x, y) not in occupied_by_trees):
+            rocks.append({"pos": (x, y)})
+            occupied_by_trees.add((x, y))
+            break
+        attempts += 1
+
+# ROCHAS (METADE DO BOT: x 75-149)
+for _ in range(250):
+    attempts = 0
+    while attempts < 100:
+        x = random.randint(75, GRID_SIZE - 1)  # Apenas metade do bot
         y = random.randint(0, GRID_SIZE - 1)
         if (not map_generator.is_water(x, y) and not map_generator.is_sand(x, y)
                 and (x, y) not in occupied_by_trees):
@@ -728,6 +794,31 @@ del occupied_by_trees
 
 collecting_rocks = []
 collect_rock_start_times = {}
+
+# ===== SISTEMA DE RESPAWN DE RECURSOS =====
+SPAWN_TIME = 30000  # A cada 30 segundos
+SPAWN_RATE = 1      # Quantas árvores/rochas gerar por vez
+last_spawn_check = 0  # Último timestamp onde verificamos spawn
+
+# ===== SISTEMA DE ATAQUE DO BOT =====
+ATTACKS_TO_DESTROY = 3  # Quantos ataques são necessários para destruir um prédio
+bot_attacking = False   # Se o bot está no modo ataque
+bot_attack_damage = {}  # Dicionário rastreando dano de cada prédio {(x, y): ataques}
+bot_attack_cooldown = 0 # Cooldown entre ataques do bot (ms)
+bot_last_attack = 0     # Último ataque realizado
+BOT_ATTACK_INTERVAL = 2000  # Intervalo entre ataques do bot (2 segundos)
+bot_attack_notified = False  # Se já notificou o jogador sobre o ataque do bot
+bot_last_attacked_building = None  # Último prédio atacado para mostrar na tela
+bot_attack_animation_time = 0  # Tempo da animação do ataque (para mostrar visual)
+BOT_ATTACK_VISUAL_DURATION = 1000  # Duração visual do ataque (1 segundo)
+
+# ===== SISTEMA DE MOVIMENTO DO BOT =====
+bot_spawned = False  # Se o bot já apareceu no mapa
+bot_position = None  # Posição atual do bot (x, y) em grid
+bot_target = None  # Prédio alvo do bot (x, y) em grid
+BOT_SPEED = 0.15  # Velocidade de movimento do bot (células por frame)
+BOT_DETECTION_RANGE = 1.5  # Proximidade para começar a atacar (em células)
+bot_buildings_destroyed = 0  # Contador de prédios destruídos
 
 # ===== SISTEMA DE CONSTRUÇÃO =====
 buildings_in_progress = []
@@ -778,8 +869,9 @@ start_quit_btn    = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 140, _bw
 # Botões menu de pausa
 pause_resume_btn  = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 - 120, _bw, _bh, "Continuar", COLORS['success'])
 pause_newgame_btn = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 - 35,  _bw, _bh, "Novo Jogo", COLORS['primary'])
-pause_options_btn = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 50,  _bw, _bh, "Opções",    COLORS['warning'])
-pause_quit_btn    = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 135, _bw, _bh, "Sair",      COLORS['danger'])
+pause_save_btn    = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 50,  _bw, _bh, "Salvar",    COLORS['gold'])
+pause_options_btn = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 135, _bw, _bh, "Opções",    COLORS['warning'])
+pause_quit_btn    = Button(SCREEN_WIDTH//2 - _bw//2, SCREEN_HEIGHT//2 + 220, _bw, _bh, "Sair",      COLORS['danger'])
 
 # Botão para abrir/fechar painel do bot (canto inferior direito)
 bot_btn = Button(SCREEN_WIDTH - 140, SCREEN_HEIGHT - 55, 130, 40, "BOT-7", COLORS['danger'])
@@ -821,7 +913,8 @@ def get_cell_at_mouse(mouse_x, mouse_y):
     gy = int(world_y // BASE_CELL_SIZE)
     return gx, gy
 
-def get_building_counts():
+def get_building_counts(owner="player"):
+    """Retorna contagem de prédios para um owner específico."""
     counted = set()
     counts = {}
 
@@ -829,6 +922,9 @@ def get_building_counts():
         for x in range(GRID_SIZE):
             cell = grid[y][x]
             if cell is None:
+                continue
+            
+            if cell.get("owner", "player") != owner:
                 continue
 
             b_id = cell["id"]
@@ -842,13 +938,19 @@ def get_building_counts():
     return counts
 
 # ===== FUNÇÕES DO JOGO =====
-def can_place_building(name, gx, gy):
+def can_place_building(name, gx, gy, owner="player"):
+    """Verifica se é possível construir, respeitando ilhas separadas."""
     width, height = buildings[name]["size"]
-
-    if gx < 0 or gy < 0:
-        return False
-    if gx + width > GRID_SIZE or gy + height > GRID_SIZE:
-        return False
+    
+    # VALIDAÇÃO DE ILHAS
+    if owner == "player":
+        # Jogador constrói de x: 0-74
+        if gx < 0 or gx + width > 75 or gy < 0 or gy + height > GRID_SIZE:
+            return False
+    elif owner == "bot":
+        # Bot constrói de x: 75-149
+        if gx < 75 or gx + width > GRID_SIZE or gy < 0 or gy + height > GRID_SIZE:
+            return False
 
     # Verifica se o terreno é válido
     for y in range(gy, gy+height):
@@ -870,6 +972,8 @@ def can_place_building(name, gx, gy):
     
     # Verifica se alguma célula já está ocupada por uma construção em andamento
     for construction in buildings_in_progress:
+        if construction.get("owner", "player") != owner:  # Só verifica construções do mesmo owner
+            continue
         for cell_x, cell_y in construction["cells"]:
             # Verifica se a célula está dentro da área da nova construção
             if (gx <= cell_x < gx + width) and (gy <= cell_y < gy + height):
@@ -891,16 +995,25 @@ def can_place_building(name, gx, gy):
 
     return True
 
-def start_construction(name, gx, gy):
-    global money, wood, stone
+def start_construction(name, gx, gy, owner="player"):
+    """Inicia construção para player ou bot."""
+    global money, wood, stone, bot_money, bot_wood, bot_stone, buildings_in_progress, bot_upgrades
     width, height = buildings[name]["size"]
     
-    money -= buildings[name]["cost_money"]
-    wood -= buildings[name]["cost_wood"]
-    stone -= buildings[name].get("cost_stone", 0)
+    if owner == "player":
+        money -= buildings[name]["cost_money"]
+        wood -= buildings[name]["cost_wood"]
+        stone -= buildings[name].get("cost_stone", 0)
+    else:  # bot
+        bot_money -= buildings[name]["cost_money"]
+        bot_wood -= buildings[name]["cost_wood"]
+        bot_stone -= buildings[name].get("cost_stone", 0)
     
     base_time = buildings[name]["build_time"]
-    multiplier = upgrades.get_construction_time_multiplier()
+    if owner == "player":
+        multiplier = upgrades.get_construction_time_multiplier()
+    else:  # bot
+        multiplier = bot_upgrades.get_construction_time_multiplier()
     build_time = int(base_time * multiplier)
     
     construction = {
@@ -909,7 +1022,8 @@ def start_construction(name, gx, gy):
         "width": width,
         "height": height,
         "build_time": build_time,
-        "cells": []
+        "cells": [],
+        "owner": owner
     }
     
     for y in range(gy, gy+height):
@@ -918,33 +1032,58 @@ def start_construction(name, gx, gy):
     
     buildings_in_progress.append(construction)
     building_start_times[(gx, gy)] = pygame.time.get_ticks()
+    
+    # Remove árvores e rochas da área de construção
+    for y in range(gy, gy+height):
+        for x in range(gx, gx+width):
+            trees[:] = [t for t in trees if t["pos"] != (x, y)]
+            rocks[:] = [r for r in rocks if r["pos"] != (x, y)]
 
-    if not mission_system.started:
+    if owner == "player" and not mission_system.started:
         mission_system.start()
 
     build_sound.play()
 
 def complete_construction(construction):
-    global building_id_counter, total_buildings_completed
-    building_id_counter += 1
+    global building_id_counter, total_buildings_completed, bot_building_id_counter, bot_total_buildings_completed
+    
+    owner = construction.get("owner", "player")
+    
+    if owner == "player":
+        building_id_counter += 1
+        building_id = building_id_counter
+    else:  # bot
+        bot_building_id_counter += 1
+        building_id = bot_building_id_counter
+    
     name = construction["name"]
     gx, gy = construction["pos"]
     width, height = construction["width"], construction["height"]
     
     for y in range(gy, gy+height):
         for x in range(gx, gx+width):
-            grid[y][x] = {"name": name, "id": building_id_counter}
+            grid[y][x] = {"name": name, "id": building_id, "owner": owner}
     
-    population_system.calculate_population(grid)
-
-    total_buildings_completed += 1
-    buildings_completed_by_name[name] = buildings_completed_by_name.get(name, 0) + 1
-    mission_system.update(total_buildings_completed, buildings_completed_by_name, oil, stone, wood)
+    # Remove árvores e rochas remanescentes (garantia)
+    for y in range(gy, gy+height):
+        for x in range(gx, gx+width):
+            trees[:] = [t for t in trees if t["pos"] != (x, y)]
+            rocks[:] = [r for r in rocks if r["pos"] != (x, y)]
+    
+    if owner == "player":
+        population_system.calculate_population(grid, owner="player")
+        total_buildings_completed += 1
+        buildings_completed_by_name[name] = buildings_completed_by_name.get(name, 0) + 1
+        mission_system.update(total_buildings_completed, buildings_completed_by_name, oil, stone, wood)
+    else:
+        bot_population_system.calculate_population(grid, owner="bot")
+        bot_total_buildings_completed += 1
+        bot_buildings_completed_by_name[name] = bot_buildings_completed_by_name.get(name, 0) + 1
 
     buildings_in_progress.remove(construction)
     del building_start_times[(gx, gy)]
     
-    build_finish_sound.play()  # NOVO: som de construção concluída
+    build_finish_sound.play()
 
 def demolish_building(gx, gy):
     if grid[gy][gx] is None:
@@ -955,8 +1094,288 @@ def demolish_building(gx, gy):
             if grid[y][x] and grid[y][x]["id"] == building_id:
                 grid[y][x] = None
     
-    population_system.calculate_population(grid)
+    population_system.calculate_population(grid, owner="player")
+    bot_population_system.calculate_population(grid, owner="bot")
     break_sound.play()
+
+# ===== SISTEMA DE IA DO BOT (COMPETIÇÃO) =====
+bot_last_action_time = 0
+BOT_ACTION_INTERVAL = 2000  # Bot toma ações a cada 2 segundos
+
+def bot_can_afford_building(building_name):
+    """Verifica se o bot pode construir algo com seus recursos."""
+    cost = buildings[building_name]["cost_money"]
+    cost_wood = buildings[building_name]["cost_wood"]
+    cost_stone = buildings[building_name].get("cost_stone", 0)
+    
+    return bot_money >= cost and bot_wood >= cost_wood and bot_stone >= cost_stone
+
+def bot_find_build_location(building_name):
+    """Encontra uma posição válida para o bot construir (na sua metade)."""
+    global trees, rocks
+    width, height = buildings[building_name]["size"]
+    
+    # Tenta posições aleatórias na metade do bot (x: 75-149)
+    attempts = 0
+    while attempts < 50:  # Aumentado de 20 para 50 tentativas
+        gx = random.randint(75, min(145, GRID_SIZE - width))
+        gy = random.randint(0, GRID_SIZE - height)
+        
+        # Verifica se PODE colocar (ignora árvores/rochas temporariamente)
+        if can_place_building(building_name, gx, gy, owner="bot"):
+            return gx, gy
+        
+        # Se não conseguiu, tenta limpar árvores/rochas da área e tenta novamente
+        for y in range(gy, min(gy+height, GRID_SIZE)):
+            for x in range(gx, min(gx+width, GRID_SIZE)):
+                # Remove árvores na área
+                trees[:] = [t for t in trees if t["pos"] != (x, y)]
+                rocks[:] = [r for r in rocks if r["pos"] != (x, y)]
+        
+        # Depois de limpar, verifica novamente
+        if can_place_building(building_name, gx, gy, owner="bot"):
+            return gx, gy
+        
+        attempts += 1
+    
+    return None
+
+def bot_decide_what_to_build():
+    """IA: Decide o que o bot deve construir."""
+    # Prioridade: Casa (população) → Predio (população) → Lojinha (renda) → Outros
+    priority_buildings = ["Casa", "Predio", "Lojinha", "Shopping", "Mall", "School", "Factory", "Mina"]
+    
+    for building_name in priority_buildings:
+        if bot_can_afford_building(building_name):
+            location = bot_find_build_location(building_name)
+            if location:
+                return building_name, location
+    
+    return None, None
+
+def bot_collect_resources(current_time):
+    """Bot coleta árvores e rochas automaticamente com limites de upgrade."""
+    global bot_wood, bot_stone, bot_collecting_trees, bot_collecting_rocks, bot_collect_start_times
+    
+    trees_collected = 0
+    rocks_collected = 0
+    
+    # Completa coletas de árvores (usando posições, não índices)
+    completed_trees = []
+    for tree_pos in bot_collecting_trees[:]:
+        # Procura a árvore por posição
+        tree_found = None
+        for tree in trees:
+            if tuple(tree["pos"]) == tree_pos:
+                tree_found = tree
+                break
+        
+        if tree_found and tree_pos in bot_collect_start_times:
+            elapsed = current_time - bot_collect_start_times[tree_pos]
+            cut_time = bot_upgrades.get_current_cut_time()
+            if elapsed >= cut_time:
+                trees.remove(tree_found)
+                bot_wood += 5
+                trees_collected += 1
+                completed_trees.append(tree_pos)
+                del bot_collect_start_times[tree_pos]
+        elif not tree_found:
+            # Árvore foi destruída/removida
+            if tree_pos in bot_collecting_trees:
+                bot_collecting_trees.remove(tree_pos)
+            if tree_pos in bot_collect_start_times:
+                del bot_collect_start_times[tree_pos]
+    
+    # Remove árvores completadas
+    for tree_pos in completed_trees:
+        if tree_pos in bot_collecting_trees:
+            bot_collecting_trees.remove(tree_pos)
+    
+    # Completa coletas de rochas (usando posições, não índices)
+    completed_rocks = []
+    for rock_pos in bot_collecting_rocks[:]:
+        # Procura a rocha por posição
+        rock_found = None
+        for rock in rocks:
+            if tuple(rock["pos"]) == rock_pos:
+                rock_found = rock
+                break
+        
+        if rock_found and rock_pos in bot_collect_start_times:
+            elapsed = current_time - bot_collect_start_times[rock_pos]
+            cut_time = bot_upgrades.get_current_cut_time()
+            if elapsed >= cut_time:
+                rocks.remove(rock_found)
+                bot_stone += 3
+                rocks_collected += 1
+                completed_rocks.append(rock_pos)
+                del bot_collect_start_times[rock_pos]
+        elif not rock_found:
+            # Rocha foi destruída/removida
+            if rock_pos in bot_collecting_rocks:
+                bot_collecting_rocks.remove(rock_pos)
+            if rock_pos in bot_collect_start_times:
+                del bot_collect_start_times[rock_pos]
+    
+    # Remove rochas completadas
+    for rock_pos in completed_rocks:
+        if rock_pos in bot_collecting_rocks:
+            bot_collecting_rocks.remove(rock_pos)
+    
+    if trees_collected > 0 or rocks_collected > 0:
+        print(f"[BOT] Coletou: {trees_collected} árvores (+{trees_collected*5} wood), {rocks_collected} rochas (+{rocks_collected*3} stone)")
+    
+    # Inicia novas coletas de árvores (respeitando limite simultâneo)
+    if len(bot_collecting_trees) < bot_upgrades.simultaneous_cuts_level:
+        for tree in trees:
+            tree_pos_tuple = tuple(tree["pos"])
+            if (75 <= tree["pos"][0] < GRID_SIZE and 
+                len(bot_collecting_trees) < bot_upgrades.simultaneous_cuts_level and
+                tree_pos_tuple not in bot_collecting_trees):
+                bot_collecting_trees.append(tree_pos_tuple)
+                bot_collect_start_times[tree_pos_tuple] = current_time
+                if len(bot_collecting_trees) >= bot_upgrades.simultaneous_cuts_level:
+                    break
+    
+    # Inicia novas coletas de rochas (respeitando limite simultâneo)
+    if len(bot_collecting_rocks) < bot_upgrades.simultaneous_cuts_level:
+        for rock in rocks:
+            rock_pos_tuple = tuple(rock["pos"])
+            if (75 <= rock["pos"][0] < GRID_SIZE and 
+                len(bot_collecting_rocks) < bot_upgrades.simultaneous_cuts_level and
+                rock_pos_tuple not in bot_collecting_rocks):
+                bot_collecting_rocks.append(rock_pos_tuple)
+                bot_collect_start_times[rock_pos_tuple] = current_time
+                if len(bot_collecting_rocks) >= bot_upgrades.simultaneous_cuts_level:
+                    break
+    
+    if len(bot_collecting_trees) > 0 or len(bot_collecting_rocks) > 0:
+        print(f"[BOT] Coletando: {len(bot_collecting_trees)} árvores, {len(bot_collecting_rocks)} rochas")
+
+def bot_tick(current_time):
+    """Função principal do bot - executada a cada intervalo."""
+    global bot_last_action_time, bot_money, bot_oil, bot_wood, bot_stone
+    
+    if current_time - bot_last_action_time < BOT_ACTION_INTERVAL:
+        return
+    
+    bot_last_action_time = current_time
+    
+    # Bot coleta renda passiva de seus prédios
+    building_counts = {}
+    for y in range(75, GRID_SIZE):  # Apenas ilha do bot
+        for x in range(75, GRID_SIZE):
+            if grid[y][x] is not None and grid[y][x].get("owner") == "bot":
+                name = grid[y][x]["name"]
+                if name not in building_counts:
+                    building_counts[name] = 0
+                building_counts[name] += 1
+    
+    # Aplica renda
+    for name, count in building_counts.items():
+        bot_money += buildings[name]["income"] * count * (current_time - bot_last_action_time) / 1000
+    
+    # Coleta óleo
+    bot_oil += building_counts.get("Gerador de petróleo", 0) * 3 * (current_time - bot_last_action_time) / 1000
+    
+    # Bot tenta construir algo
+    building_to_build, location = bot_decide_what_to_build()
+    if building_to_build and location:
+        gx, gy = location
+        # DEBUG: Mostrar intenção de construção
+        print(f"[BOT] Construindo {building_to_build} em ({gx}, {gy})")
+        print(f"[BOT] Recursos ANTES: money={bot_money:.0f}, wood={bot_wood:.0f}, stone={bot_stone:.0f}")
+        start_construction(building_to_build, gx, gy, owner="bot")
+        print(f"[BOT] Recursos DEPOIS: money={bot_money:.0f}, wood={bot_wood:.0f}, stone={bot_stone:.0f}")
+    else:
+        print(f"[BOT] Não pode construir. Recursos: money={bot_money:.0f}, wood={bot_wood:.0f}, stone={bot_stone:.0f}")
+
+def bot_attack_building(current_time):
+    """Bot ataca um prédio do jogador aleatoriamente."""
+    global bot_attacking, bot_attack_damage, bot_last_attack, bot_attack_notified, bot_last_attacked_building, bot_attack_animation_time
+    
+    # Coleta todos os prédios do jogador
+    player_buildings = []
+    for y in range(GRID_SIZE):
+        for x in range(GRID_SIZE):
+            if grid[y][x] is not None:
+                player_buildings.append((x, y))
+    
+    # Se não há prédios, o bot não pode atacar
+    if not player_buildings:
+        return
+    
+    # Escolhe um prédio aleatório para atacar
+    target = random.choice(player_buildings)
+    bot_last_attacked_building = target  # Rastreia qual prédio foi atacado
+    bot_attack_animation_time = current_time  # Marca o tempo para animação visual
+    
+    # Se não estava atacando este prédio, reseta o dano
+    if target not in bot_attack_damage:
+        bot_attack_damage[target] = 0
+    
+    # Incrementa o dano
+    bot_attack_damage[target] += 1
+    
+    building_name = grid[target[1]][target[0]]["name"] if grid[target[1]][target[0]] else "?"
+    print(f"🤖 BOT-7 atacando {building_name} em ({target[0]}, {target[1]}) - {bot_attack_damage[target]}/{ATTACKS_TO_DESTROY}")
+    
+    # Se atingiu o limite de ataques, destrói o prédio
+    if bot_attack_damage[target] >= ATTACKS_TO_DESTROY:
+        demolish_building(target[0], target[1])
+        del bot_attack_damage[target]
+        print(f"💥 {building_name} foi DESTRUÍDO pelo BOT-7!")
+        break_sound.play()
+    else:
+        # Som de dano (usando break_sound como feedback)
+        break_sound.play()
+    
+    bot_last_attack = pygame.time.get_ticks()
+
+def bot_spawn():
+    """Faz o bot aparecer em um canto aleatório do mapa."""
+    global bot_spawned, bot_position
+    
+    corners = [
+        (0, 0),                           # Canto superior esquerdo
+        (GRID_SIZE - 1, 0),              # Canto superior direito
+        (0, GRID_SIZE - 1),              # Canto inferior esquerdo
+        (GRID_SIZE - 1, GRID_SIZE - 1)   # Canto inferior direito
+    ]
+    
+    bot_position = random.choice(corners)
+    bot_spawned = True
+    print(f"🤖 BOT-7 apareceu no canto ({bot_position[0]}, {bot_position[1]})!")
+
+def bot_move_to_target():
+    """Move o bot em direção ao alvo mais próximo."""
+    global bot_position, bot_target
+    
+    if bot_position is None or bot_target is None:
+        return
+    
+    # Calcula distância até o alvo
+    dx = bot_target[0] - bot_position[0]
+    dy = bot_target[1] - bot_position[1]
+    distance = math.sqrt(dx*dx + dy*dy)
+    
+    # Se chegou perto do alvo, não move mais
+    if distance < BOT_DETECTION_RANGE:
+        return
+    
+    # Normaliza direção e move
+    if distance > 0:
+        dx_norm = dx / distance
+        dy_norm = dy / distance
+        
+        new_x = bot_position[0] + dx_norm * BOT_SPEED
+        new_y = bot_position[1] + dy_norm * BOT_SPEED
+        
+        # Clamp para dentro do mapa
+        new_x = max(0, min(GRID_SIZE - 1, new_x))
+        new_y = max(0, min(GRID_SIZE - 1, new_y))
+        
+        bot_position = (new_x, new_y)
 
 # ===== FUNÇÕES DE DESENHO =====
 def draw_grid():
@@ -1018,6 +1437,10 @@ def draw_grid():
     # 3. TERCEIRO: Desenha as árvores e rochas
     draw_trees()
     draw_rocks()
+    
+    # 3.5: Desenha o bot
+    if bot_spawned:
+        draw_bot()
     
     # 4. QUARTO: Desenha as LINHAS DO GRID - AGORA ANTES DOS PRÉDIOS
     line_width = max(1, int(zoom * 0.8))  # linhas um pouco mais finas também ajudam
@@ -1127,10 +1550,26 @@ def draw_grid():
             screen.blit(percent_text, text_rect)
             
 # Adicione esta função nova na seção de funções de desenho
-def draw_popup(screen, message, duration=2000):
-    """Desenha um popup no centro da tela por um determinado tempo"""
+def draw_popup(screen, message, duration=2000, popup_type="warning"):
+    """Desenha um popup no centro da tela por um determinado tempo
+    popup_type: 'warning' (amarelo), 'success' (verde), 'error' (vermelho)
+    """
     popup_start_time = pygame.time.get_ticks()
     showing_popup = True
+    
+    # Define cores baseado no tipo
+    color_map = {
+        'warning': COLORS['gold'],
+        'success': COLORS['success'],
+        'error': COLORS['danger']
+    }
+    border_color = color_map.get(popup_type, COLORS['gold'])
+    icon_map = {
+        'warning': "⚠️",
+        'success': "✅",
+        'error': "❌"
+    }
+    icon = icon_map.get(popup_type, "⚠️")
     
     # Cria uma superfície para o popup
     popup_width = 400
@@ -1140,7 +1579,7 @@ def draw_popup(screen, message, duration=2000):
     # Desenha o fundo do popup
     pygame.draw.rect(popup_surf, (44, 62, 80, 230), 
                     (0, 0, popup_width, popup_height), border_radius=15)
-    pygame.draw.rect(popup_surf, COLORS['gold'], 
+    pygame.draw.rect(popup_surf, border_color, 
                     (0, 0, popup_width, popup_height), width=3, border_radius=15)
     
     # Desenha o texto
@@ -1148,8 +1587,8 @@ def draw_popup(screen, message, duration=2000):
     text_rect = text.get_rect(center=(popup_width//2, popup_height//2))
     popup_surf.blit(text, text_rect)
     
-    # Desenha um ícone de aviso
-    warning_icon = font_large.render("⚠️", True, COLORS['gold'])
+    # Desenha um ícone
+    warning_icon = font_large.render(icon, True, border_color)
     icon_rect = warning_icon.get_rect(center=(popup_width//2, popup_height//2 - 20))
     popup_surf.blit(warning_icon, icon_rect)
     
@@ -1337,6 +1776,45 @@ def draw_rocks():
                 break
 
 
+def draw_bot():
+    """Desenha o bot no mapa circulando pela ilha dele e adiciona sinalizador."""
+    global bot_spawned
+    if not bot_spawned:
+        return
+    
+    # Se bot_position for None, cria uma posição padrão (centro da ilha do bot)
+    bot_display_pos = bot_position if bot_position is not None else (112, 75)  # Centro da ilha do bot
+    
+    # Converte posição do bot para coordenadas de tela
+    screen_x, screen_y = world_to_screen(bot_display_pos[0] * BASE_CELL_SIZE + BASE_CELL_SIZE/2,
+                                         bot_display_pos[1] * BASE_CELL_SIZE + BASE_CELL_SIZE/2)
+    
+    # Verifica se está dentro da tela
+    if screen_x < -200 or screen_x > SCREEN_WIDTH + 200 or screen_y < -200 or screen_y > SCREEN_HEIGHT + 200:
+        return  # Fora da tela, não renderiza
+    
+    # Desenha círculos de sinalizador
+    pygame.draw.circle(screen, (255, 100, 100), (int(screen_x), int(screen_y)), max(5, int(50 * zoom)), 3)
+    pulse = int(10 * abs(pygame.time.get_ticks() % 1000 - 500) / 500)
+    pygame.draw.circle(screen, (255, 150, 150), (int(screen_x), int(screen_y)), max(5, int(55 * zoom + pulse)), 1)
+    
+    # Desenha a imagem do bot
+    bot_size = max(10, int(80 * zoom))
+    try:
+        scaled_bot = pygame.transform.scale(bot_image, (bot_size, bot_size))
+        screen.blit(scaled_bot, (int(screen_x - bot_size/2), int(screen_y - bot_size/2)))
+    except:
+        # Fallback: desenha círculo vermelho
+        pygame.draw.circle(screen, (255, 50, 50), (int(screen_x), int(screen_y)), int(bot_size/2))
+    
+    # Desenha linha do bot até o alvo se houver um
+    if bot_target is not None:
+        target_screen_x, target_screen_y = world_to_screen(bot_target[0] * BASE_CELL_SIZE + BASE_CELL_SIZE/2,
+                                                           bot_target[1] * BASE_CELL_SIZE + BASE_CELL_SIZE/2)
+        pygame.draw.line(screen, (255, 50, 50), (int(screen_x), int(screen_y)), 
+                        (int(target_screen_x), int(target_screen_y)), 2)
+
+
 def draw_ui():
     menu_btn.draw(screen)
     hammer_btn.draw(screen)
@@ -1384,38 +1862,10 @@ def draw_ui():
     
     zoom_text = font_small.render(f"Zoom: {zoom:.1f}x", True, (200,200,200))
     screen.blit(zoom_text, (resources_panel.rect.x + 15, cut_y + 60))
-    
-    if selected_building:
-        cost_panel = Panel(SCREEN_WIDTH - 280, 390, 260, 120, COLORS['panel'])
-        cost_panel.draw(screen)
-        
-        title_text = font_small.render(f"{selected_building}", True, COLORS['gold'])
-        screen.blit(title_text, (SCREEN_WIDTH - 265, 400))
-        
-        cost_money = buildings[selected_building]["cost_money"]
-        cost_wood = buildings[selected_building]["cost_wood"]
-        build_time = int(buildings[selected_building]["build_time"] * upgrades.get_construction_time_multiplier() / 1000)
-        
-        screen.blit(pygame.transform.scale(money_icon, (20, 20)), (SCREEN_WIDTH - 265, 425))
-        money_cost_text = font_small.render(f": {cost_money}", True, (255,255,255))
-        screen.blit(money_cost_text, (SCREEN_WIDTH - 235, 427))
-        
-        screen.blit(pygame.transform.scale(wood_icon, (20, 20)), (SCREEN_WIDTH - 165, 425))
-        wood_cost_text = font_small.render(f": {cost_wood}", True, (255,255,255))
-        screen.blit(wood_cost_text, (SCREEN_WIDTH - 135, 427))
-        
-        _cost_stone = buildings[selected_building].get("cost_stone", 0)
-        if _cost_stone > 0:
-            screen.blit(pygame.transform.scale(stone_icon, (20, 20)), (SCREEN_WIDTH - 265, 447))
-            stone_cost_text = font_small.render(f": {_cost_stone}", True, (200, 200, 215))
-            screen.blit(stone_cost_text, (SCREEN_WIDTH - 235, 449))
-        
-        time_text = font_small.render(f"Tempo: {build_time}s", True, COLORS['gold'])
-        screen.blit(time_text, (SCREEN_WIDTH - 265, 470))
-        
-        if buildings[selected_building]["population"] > 0:
-            pop_text = font_small.render(f"+{buildings[selected_building]['population']} pop", True, COLORS['gold'])
-            screen.blit(pop_text, (SCREEN_WIDTH - 265, 490))
+
+def draw_competition_panel():
+    """(DEPRECATED: Agora integrado ao painel BOT-7) Apenas para retrocompatibilidade."""
+    pass  # Removido - conteúdo movido para draw_bot_panel()
 
 def draw_mission_panel():
     mission_panel = Panel(20, SCREEN_HEIGHT - 145, 470, 120, (44, 62, 80, 220))
@@ -1698,13 +2148,39 @@ def reset_game():
     global building_id_counter, current_mode, selected_building, preview_active
     global total_buildings_completed, buildings_completed_by_name
     global rocks, collecting_rocks, collect_rock_start_times
+    global bot_attacking, bot_attack_damage, bot_attack_notified, bot_last_attacked_building, bot_attack_animation_time
+    global bot_spawned, bot_position, bot_target
+    global bot_money, bot_wood, bot_oil, bot_stone, bot_total_buildings_completed, bot_buildings_completed_by_name, bot_building_id_counter
+    global bot_collecting_trees, bot_collecting_rocks, bot_collect_start_times, bot_upgrades, bot_initial_pan_done
+    
     for ch in cutting_sounds_playing.values():
         ch.stop()
     cutting_sounds_playing.clear()
+    
+    # RESET PLAYER
     money = 1000
     wood = 0
     oil = 0
     stone = 0
+    building_id_counter = 0
+    total_buildings_completed = 0
+    buildings_completed_by_name.clear()
+    
+    # RESET BOT
+    bot_money = 1000
+    bot_wood = 100  # Recursos iniciais para novo jogo
+    bot_oil = 0
+    bot_stone = 100  # Recursos iniciais
+    bot_building_id_counter = 0
+    bot_total_buildings_completed = 0
+    bot_buildings_completed_by_name.clear()
+    bot_upgrades = UpgradeSystem()  # Reseta upgrades do bot
+    bot_collecting_trees.clear()
+    bot_collecting_rocks.clear()
+    bot_collect_start_times.clear()
+    bot_spawned = True  # Bot aparece quando o jogo inicia
+    bot_initial_pan_done = False  # Reseta pan automático para novo jogo
+    
     grid = [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
     collecting_trees.clear()
     collect_start_times.clear()
@@ -1712,10 +2188,15 @@ def reset_game():
     collect_rock_start_times.clear()
     buildings_in_progress.clear()
     building_start_times.clear()
-    building_id_counter = 0
-    total_buildings_completed = 0
-    buildings_completed_by_name.clear()
     mission_system.reset()
+    bot_attacking = False
+    bot_attack_damage.clear()
+    bot_attack_notified = False
+    bot_last_attacked_building = None
+    bot_attack_animation_time = 0
+    bot_spawned = False
+    bot_position = None
+    bot_target = None
     flying_icons.clear()
     trees.clear()
     for _ in range(1000):
@@ -1740,7 +2221,8 @@ def reset_game():
                 _occupied.add((x, y))
                 break
             attempts += 1
-    population_system.calculate_population(grid)
+    population_system.calculate_population(grid, owner="player")
+    bot_population_system.calculate_population(grid, owner="bot")
     current_mode = "none"
     selected_building = None
     preview_active = False
@@ -1782,14 +2264,15 @@ def draw_pause_menu():
     overlay.fill((0, 0, 0, 160))
     screen.blit(overlay, (0, 0))
 
-    panel = Panel(SCREEN_WIDTH // 2 - 210, SCREEN_HEIGHT // 2 - 185, 420, 390, (44, 62, 80, 245))
+    # Painel expandido para cobrir todos os botões
+    panel = Panel(SCREEN_WIDTH // 2 - 210, SCREEN_HEIGHT // 2 - 185, 420, 490, (44, 62, 80, 245))
     panel.draw(screen)
 
     t = font_large.render("PAUSADO", True, COLORS['gold'])
     screen.blit(t, t.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 155)))
 
     mx, my = pygame.mouse.get_pos()
-    for btn in (pause_resume_btn, pause_newgame_btn, pause_options_btn, pause_quit_btn):
+    for btn in (pause_resume_btn, pause_newgame_btn, pause_save_btn, pause_options_btn, pause_quit_btn):
         btn.hovered = btn.rect.collidepoint(mx, my)
         btn.draw(screen)
 
@@ -1798,10 +2281,16 @@ def draw_pause_menu():
 
 # ===== PAINEL DO BOT =====
 def draw_bot_panel():
-    """Painel flutuante com os recursos do bot simulado."""
-    PW, PH = 230, 230
-    PX = 10
-    PY = 20
+    """Painel unificado BOT-7 com recursos + competição."""
+    global bot_panel_x, bot_panel_y
+    PW, PH = 340, 360  # Expandido para incluir competição
+    PX = bot_panel_x
+    PY = bot_panel_y
+
+    # Garante que o painel fique dentro da tela
+    PX = max(0, min(PX, SCREEN_WIDTH  - PW))
+    PY = max(0, min(PY, SCREEN_HEIGHT - PH))
+    bot_panel_x, bot_panel_y = PX, PY
 
     # fundo
     surf = pygame.Surface((PW, PH), pygame.SRCALPHA)
@@ -1809,24 +2298,37 @@ def draw_bot_panel():
     screen.blit(surf, (PX, PY))
     pygame.draw.rect(screen, (231, 76, 60), pygame.Rect(PX, PY, PW, PH), width=2, border_radius=14)
 
-    # cabeçalho
+    # cabeçalho (área de drag)
+    header_rect = pygame.Rect(PX, PY, PW, 32)
     header_surf = pygame.Surface((PW, 32), pygame.SRCALPHA)
     pygame.draw.rect(header_surf, (231, 76, 60, 200), header_surf.get_rect(), border_radius=14)
     screen.blit(header_surf, (PX, PY))
 
+    # ícone de arrastar (6 pontinhos) no lado esquerdo do header
+    for di in range(2):
+        for dj in range(3):
+            pygame.draw.circle(screen, (255, 255, 255, 180),
+                               (PX + 8 + di * 6, PY + 8 + dj * 6), 2)
+
     # ícone de robô (primitivas)
-    rx, ry = PX + 18, PY + 8
+    rx, ry = PX + 22, PY + 8
     pygame.draw.rect(screen, (200, 200, 210), (rx, ry + 2, 14, 12), border_radius=3)
     pygame.draw.rect(screen, (100, 100, 120), (rx + 2, ry + 4, 3, 3))
     pygame.draw.rect(screen, (100, 100, 120), (rx + 9, ry + 4, 3, 3))
     pygame.draw.line(screen, (200, 200, 210), (rx + 7, ry), (rx + 7, ry + 2), 2)
     pygame.draw.rect(screen, (150, 150, 160), (rx + 3, ry + 9, 8, 2))
 
-    title = font_medium.render(bot.name, True, (255, 255, 255))
-    screen.blit(title, (PX + 38, PY + 7))
+    title = font_medium.render("🤖 BOT-7", True, (255, 255, 255))
+    screen.blit(title, (PX + 42, PY + 7))
 
+    # ===== SEÇÃO DE RECURSOS DO BOT =====
+    y_pos = PY + 40
+    res_label = font_small.render("Recursos:", True, (200, 200, 255))
+    screen.blit(res_label, (PX + 10, y_pos))
+    y_pos += 22
+    
     # recursos
-    row_h = 38
+    row_h = 28
     items = [
         (money_icon,     f"${bot.fmt_money():,}",  (255, 230, 100)),
         (wood_icon,      str(bot.fmt_wood()),        (180, 255, 150)),
@@ -1836,17 +2338,40 @@ def draw_bot_panel():
     ]
 
     for i, (icon, text, color) in enumerate(items):
-        iy = PY + 38 + i * row_h
-        # fundo alternado suave
-        if i % 2 == 0:
-            row_bg = pygame.Surface((PW - 8, row_h - 4), pygame.SRCALPHA)
-            pygame.draw.rect(row_bg, (255, 255, 255, 15), row_bg.get_rect(), border_radius=6)
-            screen.blit(row_bg, (PX + 4, iy + 2))
+        iy = y_pos + i * row_h
+        small_icon = pygame.transform.scale(icon, (20, 20))
+        screen.blit(small_icon, (PX + 12, iy))
+        val_surf = font_small.render(text, True, color)
+        screen.blit(val_surf, (PX + 36, iy + 2))
 
-        small_icon = pygame.transform.scale(icon, (26, 26))
-        screen.blit(small_icon, (PX + 12, iy + 6))
-        val_surf = font_medium.render(text, True, color)
-        screen.blit(val_surf, (PX + 46, iy + 10))
+    # ===== SEÇÃO DE COMPETIÇÃO =====
+    y_pos += len(items) * row_h + 15
+    
+    # Divider
+    pygame.draw.line(screen, (150, 150, 150), (PX + 10, y_pos), (PX + PW - 10, y_pos), 1)
+    y_pos += 10
+    
+    comp_label = font_small.render("⚔️ Competição:", True, (255, 200, 0))
+    screen.blit(comp_label, (PX + 10, y_pos))
+    y_pos += 22
+    
+    # Comparações
+    player_pop = population_system.population
+    bot_pop = bot_population_system.population
+    player_building_count = sum(1 for y in range(GRID_SIZE) for x in range(75) if grid[y][x] and grid[y][x].get("owner", "player") == "player")
+    bot_building_count = sum(1 for y in range(GRID_SIZE) for x in range(75, GRID_SIZE) if grid[y][x] and grid[y][x].get("owner") == "bot")
+    
+    comp_items = [
+        (f"Você: ${int(money)}" if money > bot_money else f"Bot: ${int(bot_money)}", (100, 255, 100) if money > bot_money else (255, 100, 100)),
+        (f"Pop Você: {player_pop}" if player_pop > bot_pop else f"Pop Bot: {bot_pop}", (100, 255, 100) if player_pop > bot_pop else (255, 100, 100)),
+        (f"Prédios Você: {player_building_count}" if player_building_count > bot_building_count else f"Prédios Bot: {bot_building_count}", (100, 255, 100) if player_building_count > bot_building_count else (255, 100, 100)),
+    ]
+    
+    comp_row_h = 22
+    for i, (text, color) in enumerate(comp_items):
+        iy = y_pos + i * comp_row_h
+        comp_surf = font_small.render(text, True, color)
+        screen.blit(comp_surf, (PX + 15, iy))
 
     # botão fechar (X) no canto do painel
     close_x = PX + PW - 22
@@ -1855,7 +2380,7 @@ def draw_bot_panel():
     cx_text = font_small.render("X", True, (255, 255, 255))
     screen.blit(cx_text, cx_text.get_rect(center=(close_x, close_y + 8)))
 
-    return pygame.Rect(close_x - 9, close_y, 18, 18)   # rect do botão fechar
+    return header_rect, pygame.Rect(close_x - 9, close_y, 18, 18)
 
 
 def draw_options_screen():
@@ -1901,22 +2426,382 @@ def draw_options_screen():
     draw_custom_cursor(screen, mx, my)
 
 
+def draw_save_confirmation_dialog():
+    """Mostra diálogo de confirmação para salvar ao sair."""
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 170))
+    screen.blit(overlay, (0, 0))
+    
+    dialog_w, dialog_h = 400, 200
+    dialog_x = SCREEN_WIDTH // 2 - dialog_w // 2
+    dialog_y = SCREEN_HEIGHT // 2 - dialog_h // 2
+    
+    panel = Panel(dialog_x, dialog_y, dialog_w, dialog_h, (44, 62, 80, 245))
+    panel.draw(screen)
+    
+    # Título
+    title = font_large.render("Salvar Jogo?", True, COLORS['gold'])
+    screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, dialog_y + 30)))
+    
+    # Mensagem
+    msg = font_medium.render("Deseja salvar o progresso antes de sair?", True, (255, 255, 255))
+    screen.blit(msg, msg.get_rect(center=(SCREEN_WIDTH // 2, dialog_y + 70)))
+    
+    # Botão Salvar
+    btn_save_rect = pygame.Rect(dialog_x + 30, dialog_y + 120, 150, 50)
+    mx, my = pygame.mouse.get_pos()
+    save_hover = btn_save_rect.collidepoint(mx, my)
+    pygame.draw.rect(screen, COLORS['success'] if save_hover else (30, 120, 60), btn_save_rect, border_radius=8)
+    save_text = font_medium.render("Salvar", True, (255, 255, 255))
+    screen.blit(save_text, save_text.get_rect(center=btn_save_rect.center))
+    
+    # Botão Descartar
+    btn_discard_rect = pygame.Rect(dialog_x + 220, dialog_y + 120, 150, 50)
+    discard_hover = btn_discard_rect.collidepoint(mx, my)
+    pygame.draw.rect(screen, COLORS['danger'] if discard_hover else (120, 30, 30), btn_discard_rect, border_radius=8)
+    discard_text = font_medium.render("Descartar", True, (255, 255, 255))
+    screen.blit(discard_text, discard_text.get_rect(center=btn_discard_rect.center))
+
+
+def draw_load_confirmation_dialog():
+    """Mostra diálogo de confirmação para carregar save."""
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 170))
+    screen.blit(overlay, (0, 0))
+    
+    dialog_w, dialog_h = 420, 220
+    dialog_x = SCREEN_WIDTH // 2 - dialog_w // 2
+    dialog_y = SCREEN_HEIGHT // 2 - dialog_h // 2
+    
+    panel = Panel(dialog_x, dialog_y, dialog_w, dialog_h, (44, 62, 80, 245))
+    panel.draw(screen)
+    
+    # Título
+    title = font_large.render("Carregar Jogo?", True, COLORS['gold'])
+    screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, dialog_y + 30)))
+    
+    # Mensagem
+    msg = font_medium.render("Um save foi encontrado!", True, (255, 255, 255))
+    screen.blit(msg, msg.get_rect(center=(SCREEN_WIDTH // 2, dialog_y + 70)))
+    msg2 = font_small.render("Deseja continuar desse save ou começar novo jogo?", True, (200, 200, 200))
+    screen.blit(msg2, msg2.get_rect(center=(SCREEN_WIDTH // 2, dialog_y + 100)))
+    
+    # Botão Carregar
+    btn_load_rect = pygame.Rect(dialog_x + 30, dialog_y + 140, 160, 50)
+    mx, my = pygame.mouse.get_pos()
+    load_hover = btn_load_rect.collidepoint(mx, my)
+    pygame.draw.rect(screen, COLORS['success'] if load_hover else (30, 120, 60), btn_load_rect, border_radius=8)
+    load_text = font_medium.render("Carregar", True, (255, 255, 255))
+    screen.blit(load_text, load_text.get_rect(center=btn_load_rect.center))
+    
+    # Botão Novo Jogo
+    btn_new_rect = pygame.Rect(dialog_x + 230, dialog_y + 140, 160, 50)
+    new_hover = btn_new_rect.collidepoint(mx, my)
+    pygame.draw.rect(screen, COLORS['primary'] if new_hover else (40, 100, 150), btn_new_rect, border_radius=8)
+    new_text = font_medium.render("Novo Jogo", True, (255, 255, 255))
+    screen.blit(new_text, new_text.get_rect(center=btn_new_rect.center))
+
+
+def draw_select_save_screen():
+    """Mostra tela de seleção de saves."""
+    global selected_save_index
+    
+    screen.fill((15, 25, 45))
+    
+    # Título
+    title = font_large.render("Selecione um Save", True, COLORS['gold'])
+    screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, 50)))
+    
+    saves = get_save_files()
+    
+    if not saves:
+        msg = font_medium.render("Nenhum save encontrado", True, (200, 100, 100))
+        screen.blit(msg, msg.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)))
+        
+        # Botão voltar
+        btn_back = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 100, 200, 50)
+        mx, my = pygame.mouse.get_pos()
+        back_hover = btn_back.collidepoint(mx, my)
+        pygame.draw.rect(screen, COLORS['primary'] if back_hover else (40, 100, 150), btn_back, border_radius=8)
+        back_text = font_medium.render("Voltar", True, (255, 255, 255))
+        screen.blit(back_text, back_text.get_rect(center=btn_back.center))
+        return
+    
+    # Área de scroll
+    scroll_area_y = 120
+    scroll_area_h = SCREEN_HEIGHT - 250
+    item_height = 80
+    total_height = len(saves) * item_height
+    
+    # Lista de saves
+    mx, my = pygame.mouse.get_pos()
+    for i, save_file in enumerate(saves):
+        save_info = get_save_info(save_file)
+        if not save_info:
+            continue
+        
+        y = scroll_area_y + i * item_height - save_scroll_offset
+        
+        if y < scroll_area_y or y + item_height > scroll_area_y + scroll_area_h:
+            continue
+        
+        # Retângulo do item
+        item_rect = pygame.Rect(50, y, SCREEN_WIDTH - 100, item_height - 10)
+        
+        # Cor: selecionado ou hover
+        is_hover = item_rect.collidepoint(mx, my)
+        is_selected = (i == selected_save_index)
+        
+        if is_selected:
+            color = COLORS['primary']
+        elif is_hover:
+            color = (80, 120, 160)
+        else:
+            color = (50, 80, 120)
+        
+        pygame.draw.rect(screen, color, item_rect, border_radius=8)
+        pygame.draw.rect(screen, COLORS['gold'] if is_selected else (100, 150, 200), item_rect, width=2, border_radius=8)
+        
+        # Texto do save
+        date_text = font_small.render(f"📅 {save_info['date']}", True, (200, 200, 200))
+        screen.blit(date_text, (item_rect.x + 20, item_rect.y + 15))
+        
+        res_text = f"💰 ${save_info['money']} | 🏢 {save_info['buildings']} prédios"
+        res_render = font_small.render(res_text, True, (150, 200, 150))
+        screen.blit(res_render, (item_rect.x + 20, item_rect.y + 45))
+    
+    # Botões de ação
+    btn_load = pygame.Rect(SCREEN_WIDTH // 2 - 350, SCREEN_HEIGHT - 90, 150, 50)
+    btn_delete = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 90, 150, 50)
+    btn_new = pygame.Rect(SCREEN_WIDTH // 2 + 150, SCREEN_HEIGHT - 90, 150, 50)
+    
+    # Carregar
+    load_hover = btn_load.collidepoint(mx, my)
+    pygame.draw.rect(screen, COLORS['success'] if load_hover else (30, 120, 60), btn_load, border_radius=8)
+    screen.blit(font_medium.render("Carregar", True, (255, 255, 255)), btn_load.move(10, 12))
+    
+    # Deletar
+    del_hover = btn_delete.collidepoint(mx, my)
+    pygame.draw.rect(screen, COLORS['danger'] if del_hover else (120, 40, 40), btn_delete, border_radius=8)
+    screen.blit(font_medium.render("Deletar", True, (255, 255, 255)), btn_delete.move(10, 12))
+    
+    # Novo Jogo
+    new_hover = btn_new.collidepoint(mx, my)
+    pygame.draw.rect(screen, COLORS['primary'] if new_hover else (40, 100, 150), btn_new, border_radius=8)
+    screen.blit(font_medium.render("Novo Jogo", True, (255, 255, 255)), btn_new.move(10, 12))
+
+
+# ===== SISTEMA DE SAVE/LOAD MÚLTIPLO =====
+SAVES_DIR = "saves"
+
+# Cria diretório de saves se não existir
+if not os.path.exists(SAVES_DIR):
+    os.makedirs(SAVES_DIR)
+
+def get_save_files():
+    """Retorna lista de arquivos de save ordenados por data (mais recente primeiro)."""
+    try:
+        saves = [f for f in os.listdir(SAVES_DIR) if f.startswith("save_") and f.endswith(".json")]
+        # Ordena por data modificada (mais recente primeiro)
+        saves.sort(key=lambda x: os.path.getmtime(os.path.join(SAVES_DIR, x)), reverse=True)
+        return saves
+    except:
+        return []
+
+def get_save_info(filename):
+    """Extrai informações do save (data, recursos, prédios)."""
+    filepath = os.path.join(SAVES_DIR, filename)
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        mtime = os.path.getmtime(filepath)
+        date_str = datetime.fromtimestamp(mtime).strftime("%d/%m/%Y %H:%M")
+        
+        money = data.get("money", 0)
+        buildings = data.get("total_buildings_completed", 0)
+        
+        return {
+            "date": date_str,
+            "money": money,
+            "buildings": buildings,
+            "filename": filename
+        }
+    except:
+        return None
+
+def save_game(custom_name=""):
+    """Salva o estado do jogo em arquivo JSON com timestamp."""
+    # Gera nome do arquivo com timestamp
+    if custom_name:
+        timestamp = custom_name.replace(" ", "_")
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    save_file = os.path.join(SAVES_DIR, f"save_{timestamp}.json")
+    
+    game_data = {
+        "money": money,
+        "wood": wood,
+        "oil": oil,
+        "stone": stone,
+        "grid": [[cell.copy() if cell else None for cell in row] for row in grid],
+        "trees": trees.copy(),
+        "rocks": rocks.copy(),
+        "buildings_in_progress": list(buildings_in_progress),
+        "building_start_times": {str(k): v for k, v in building_start_times.items()},
+        "building_id_counter": building_id_counter,
+        "total_buildings_completed": total_buildings_completed,
+        "buildings_completed_by_name": buildings_completed_by_name.copy(),
+        "mission_data": mission_system.get_state() if hasattr(mission_system, 'get_state') else {},
+        "upgrades": {
+            "simultaneous_cuts_level": upgrades.simultaneous_cuts_level,
+            "cut_time_level": upgrades.cut_time_level,
+            "construction_time_level": upgrades.construction_time_level
+        }
+    }
+    
+    try:
+        with open(save_file, 'w', encoding='utf-8') as f:
+            json.dump(game_data, f, indent=2, ensure_ascii=False)
+        print(f"[OK] Jogo salvo em {save_file}")
+        return f"save_{timestamp}.json"  # Retorna o nome do arquivo
+    except Exception as e:
+        print(f"[ERRO] Erro ao salvar jogo: {e}")
+        return None
+
+def save_game_to_file(filename):
+    """Sobrescreve um arquivo de save específico."""
+    filepath = os.path.join(SAVES_DIR, filename)
+    
+    game_data = {
+        "money": money,
+        "wood": wood,
+        "oil": oil,
+        "stone": stone,
+        "grid": [[cell.copy() if cell else None for cell in row] for row in grid],
+        "trees": trees.copy(),
+        "rocks": rocks.copy(),
+        "buildings_in_progress": list(buildings_in_progress),
+        "building_start_times": {str(k): v for k, v in building_start_times.items()},
+        "building_id_counter": building_id_counter,
+        "total_buildings_completed": total_buildings_completed,
+        "buildings_completed_by_name": buildings_completed_by_name.copy(),
+        "mission_data": mission_system.get_state() if hasattr(mission_system, 'get_state') else {},
+        "upgrades": {
+            "simultaneous_cuts_level": upgrades.simultaneous_cuts_level,
+            "cut_time_level": upgrades.cut_time_level,
+            "construction_time_level": upgrades.construction_time_level
+        }
+    }
+    
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(game_data, f, indent=2, ensure_ascii=False)
+        print(f"[OK] Jogo sobrescrito em {filepath}")
+        return True
+    except Exception as e:
+        print(f"[ERRO] Erro ao salvar jogo: {e}")
+        return False
+
+def load_game(save_file):
+    """Carrega o estado do jogo de arquivo JSON específico."""
+    global money, wood, oil, stone, grid, trees, rocks, buildings_in_progress
+    global building_start_times, building_id_counter, total_buildings_completed, buildings_completed_by_name
+    global population_system, bot_upgrades
+    
+    filepath = os.path.join(SAVES_DIR, save_file)
+    if not os.path.exists(filepath):
+        print(f"[INFO] Save nao encontrado ({filepath})")
+        return False
+    
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            game_data = json.load(f)
+        
+        # Atribui valores carregados às variáveis globais
+        money = game_data.get("money", 1000)
+        wood = game_data.get("wood", 0)
+        oil = game_data.get("oil", 0)
+        stone = game_data.get("stone", 0)
+        grid[:] = game_data.get("grid", [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)])
+        trees[:] = game_data.get("trees", [])
+        rocks[:] = game_data.get("rocks", [])
+        building_id_counter = game_data.get("building_id_counter", 0)
+        total_buildings_completed = game_data.get("total_buildings_completed", 0)
+        buildings_completed_by_name.clear()
+        buildings_completed_by_name.update(game_data.get("buildings_completed_by_name", {}))
+        
+        # Restaura building_start_times (converte strings de volta para tuplas)
+        building_start_times.clear()
+        for str_key, v in game_data.get("building_start_times", {}).items():
+            try:
+                key = tuple(map(int, str_key.strip('()').split(', ')))
+                building_start_times[key] = v
+            except:
+                pass
+        
+        buildings_in_progress.clear()
+        buildings_in_progress.extend(game_data.get("buildings_in_progress", []))
+        
+        # Restaura upgrades
+        upgrades_data = game_data.get("upgrades", {})
+        if upgrades_data:
+            upgrades.simultaneous_cuts_level = upgrades_data.get("simultaneous_cuts_level", 1)
+            upgrades.cut_time_level = upgrades_data.get("cut_time_level", 1)
+            upgrades.construction_time_level = upgrades_data.get("construction_time_level", 1)
+        
+        # Restaura bot_upgrades (por enquanto com valores padrão)
+        bot_upgrades = UpgradeSystem()
+        
+        # Recalcula população
+        population_system.calculate_population(grid, owner="player")
+        bot_population_system.calculate_population(grid, owner="bot")
+        
+        print(f"[OK] Jogo carregado de {filepath}")
+        return True
+    except Exception as e:
+        print(f"[ERRO] Erro ao carregar jogo: {e}")
+        return False
+
+def show_save_confirmation_dialog():
+    """Mostra um diálogo de confirmação para salvar ao sair."""
+    dialog_width = 400
+    dialog_height = 180
+    dialog_x = SCREEN_WIDTH // 2 - dialog_width // 2
+    dialog_y = SCREEN_HEIGHT // 2 - dialog_height // 2
+    
+    # Retorna: "save", "discard", ou None (ao clicar no X ou Esc)
+    return {"x": dialog_x, "y": dialog_y, "w": dialog_width, "h": dialog_height}
+
+
 # ----- LOOP PRINCIPAL -----
 running = True
 last_income_time = pygame.time.get_ticks()
+save_dialog_active = False
+selected_save_index = 0
+save_scroll_offset = 0
+popup_active = False
+popup_message = ""
+popup_type = "warning"  # 'warning', 'success', 'error'
+popup_start_time = 0
+game_saved = False  # Flag para rastrear se o jogo foi salvo recentemente
+last_save_file = None  # Rastreia o último arquivo salvo para sobrescrever
 
-population_system.calculate_population(grid)
+population_system.calculate_population(grid, owner="player")
+bot_population_system.calculate_population(grid, owner="bot")
 
 while running:
     current_time = pygame.time.get_ticks()
     dt = clock.tick(60)
 
     if current_time - last_income_time >= 1000:
+        # RENDA DO JOGADOR
         base_income = 0
-        for row in grid:
-            for cell in row:
-                if cell:
-                    base_income += buildings[cell["name"]]["income"]
+        for y in range(GRID_SIZE):
+            for x in range(GRID_SIZE):
+                if grid[y][x] is not None and grid[y][x].get("owner", "player") == "player":
+                    base_income += buildings[grid[y][x]["name"]]["income"]
 
         building_counts = get_building_counts()
         oil += building_counts.get("Gerador de petróleo", 0) * buildings["Gerador de petróleo"].get("oil_output", 0)
@@ -1925,10 +2810,75 @@ while running:
         multiplier = population_system.get_income_multiplier()
         money += int(base_income * multiplier)
         mission_system.update(total_buildings_completed, buildings_completed_by_name, oil, stone, wood)
+        
+        # RENDA DO BOT
+        bot_base_income = 0
+        for y in range(75, GRID_SIZE):
+            for x in range(75, GRID_SIZE):
+                if grid[y][x] is not None and grid[y][x].get("owner") == "bot":
+                    bot_base_income += buildings[grid[y][x]["name"]]["income"]
+        
+        bot_multiplier = bot_population_system.get_income_multiplier()
+        bot_money += int(bot_base_income * bot_multiplier)
+        
         last_income_time = current_time
 
-    # Bot tick (roda todo frame, não só no tick de renda)
-    bot.tick(current_time)
+    # ===== IA DO BOT - ATIVADA =====
+    bot_tick(current_time)
+    if game_state == "playing":
+        bot_collect_resources(current_time)
+
+    # ===== AÇÕES DO BOT - DESABILITADAS =====
+    # Conta construções do JOGADOR (não do bot)
+    player_building_count = get_building_counts()
+    total_player_buildings = sum(player_building_count.values())
+    # if total_player_buildings >= 5 and not bot_spawned:
+    #     bot_spawn()
+    # 
+    # # Se bot spawned, move em direção ao alvo
+    # if bot_spawned and bot_position is not None:
+    #     # Escolhe um alvo aleatório se não tem um
+    #     if bot_target is None:
+    #         player_buildings = []
+    #         for y in range(GRID_SIZE):
+    #             for x in range(GRID_SIZE):
+    #                 if grid[y][x] is not None:
+    #                     player_buildings.append((x, y))
+    #         if player_buildings:
+    #             bot_target = random.choice(player_buildings)
+    #     
+    #     # Move o bot
+    #     bot_move_to_target()
+    #     
+    #     # Se chegou próximo, começa a atacar
+    #     if bot_target is not None:
+    #         dx = bot_target[0] - bot_position[0]
+    #         dy = bot_target[1] - bot_position[1]
+    #         distance = math.sqrt(dx*dx + dy*dy)
+    #         
+    #         if distance < BOT_DETECTION_RANGE and current_time - bot_last_attack >= BOT_ATTACK_INTERVAL:
+    #             bot_attacking = True
+    #             bot_attack_building(current_time)
+    #             # Escolhe novo alvo
+    #             player_buildings = []
+    #             for y in range(GRID_SIZE):
+    #                 for x in range(GRID_SIZE):
+    #                     if grid[y][x] is not None:
+    #                         player_buildings.append((x, y))
+    #             if player_buildings:
+    #                 bot_target = random.choice(player_buildings)
+    #             
+    #             if not bot_attack_notified:
+    #                 bot_attack_notified = True
+    #                 print("🤖 BOT-7 começou a atacar suas construções!")
+
+    # ===== SISTEMA DE GERAÇÃO DE RECURSOS =====
+    # Desabilitado por enquanto para evitar conflitos com construções
+    # A cada 30 segundos, o jogo geraria NOVAS árvores e rochas em espaços vazios
+    
+    # if current_time - last_spawn_check >= SPAWN_TIME:
+    #     last_spawn_check = current_time
+    #     ... código removido ...
 
     completed_trees = []
 
@@ -2028,7 +2978,7 @@ while running:
                     stone_icon,
                     duration=800 + random.randint(-100, 100)
                 ))
-            # Remove a rocha e dá pedra
+            # Remove a rocha
             for i, rock in enumerate(rocks):
                 if rock["pos"] == rock_pos:
                     rocks.pop(i)
@@ -2050,6 +3000,21 @@ while running:
 
     if game_state == "playing":
         update_camera_smooth()
+        
+        # Pan automático para mostrar o bot na primeira vez que o jogo entra em "playing"
+        if not bot_initial_pan_done:
+            # Posiciona câmera para mostrar a ilha do bot (x: 75-149)
+            # Centro da ilha do bot: x=112, y=75
+            target_camera_x = 112 * BASE_CELL_SIZE - SCREEN_WIDTH / (2 * target_zoom)
+            target_camera_y = 75 * BASE_CELL_SIZE - SCREEN_HEIGHT / (2 * target_zoom)
+            
+            # Garante que fica dentro dos limites
+            max_x = GRID_SIZE * BASE_CELL_SIZE - SCREEN_WIDTH / target_zoom
+            max_y = GRID_SIZE * BASE_CELL_SIZE - SCREEN_HEIGHT / target_zoom
+            target_camera_x = max(0, min(target_camera_x, max_x))
+            target_camera_y = max(0, min(target_camera_y, max_y))
+            
+            bot_initial_pan_done = True
 
     if game_state in ("playing", "paused"):
         screen.fill((200, 240, 200))
@@ -2071,11 +3036,13 @@ while running:
                 pygame.display.toggle_fullscreen()
             elif event.key == pygame.K_q and game_state == "playing":
                 money += 999999
+                print(f"DEBUG: Money+999999, total={money}")
                 wood += 9999
                 stone += 9999
                 oil += 9999
             elif event.key == pygame.K_w and game_state == "playing":
                 upgrades.max_all()
+            # F6 removido - usar botão Salvar no menu de pausa
             elif event.key == pygame.K_ESCAPE:
                 if game_state == "playing":
                     game_state = "paused"
@@ -2084,6 +3051,12 @@ while running:
                     preview_active = False
                 elif game_state == "paused":
                     game_state = "playing"
+                elif game_state == "save_confirmation":
+                    game_state = "paused"
+                elif game_state == "load_confirmation":
+                    game_state = "start_screen"
+                elif game_state == "select_save":
+                    game_state = "start_screen"
                 elif game_state == "options":
                     game_state = "start_screen" if options_from == "start" else "paused"
                 else:
@@ -2091,18 +3064,28 @@ while running:
                     selected_building = None
                     preview_active = False
 
-        if event.type == pygame.MOUSEWHEEL and game_state == "playing":
-            # Verifica se está no menu com scroll aberto
-            if current_mode == "menu":
-                menu_area = pygame.Rect(SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT//2 - 200, 400, 400)
-                if menu_area.collidepoint(mouse_x, mouse_y):
-                    menu_scroll.scroll(-event.y)  # Inverte para scroll natural
+        if event.type == pygame.MOUSEWHEEL:
+            if game_state == "select_save":
+                # Scroll na lista de saves
+                saves = get_save_files()
+                if saves:
+                    item_height = 80
+                    total_height = len(saves) * item_height
+                    scroll_area_h = SCREEN_HEIGHT - 250
+                    max_offset = max(0, total_height - scroll_area_h)
+                    save_scroll_offset = max(0, min(max_offset, save_scroll_offset - event.y * 50))
+            elif game_state == "playing":
+                # Verifica se está no menu com scroll aberto
+                if current_mode == "menu":
+                    menu_area = pygame.Rect(SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT//2 - 200, 400, 400)
+                    if menu_area.collidepoint(mouse_x, mouse_y):
+                        menu_scroll.scroll(-event.y)  # Inverte para scroll natural
+                    else:
+                        new_zoom = target_zoom + (event.y * ZOOM_SPEED)
+                        apply_zoom(new_zoom, mouse_x, mouse_y)
                 else:
                     new_zoom = target_zoom + (event.y * ZOOM_SPEED)
                     apply_zoom(new_zoom, mouse_x, mouse_y)
-            else:
-                new_zoom = target_zoom + (event.y * ZOOM_SPEED)
-                apply_zoom(new_zoom, mouse_x, mouse_y)
 
         if event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
@@ -2110,29 +3093,52 @@ while running:
                 if game_state == "start_screen":
                     if start_play_btn.rect.collidepoint(mouse_x, mouse_y):
                         button_sound.play()
-                        game_state = "playing"
+                        saves = get_save_files()
+                        if saves:
+                            game_state = "select_save"
+                            selected_save_index = 0
+                            save_scroll_offset = 0
+                        else:
+                            game_state = "playing"
                     elif start_options_btn.rect.collidepoint(mouse_x, mouse_y):
                         button_sound.play()
                         options_from = "start"
                         game_state = "options"
                     elif start_quit_btn.rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
                         running = False
 
                 # --- Menu de pausa ---
                 elif game_state == "paused":
                     if pause_resume_btn.rect.collidepoint(mouse_x, mouse_y):
                         button_sound.play()
+                        game_saved = False
                         game_state = "playing"
                     elif pause_newgame_btn.rect.collidepoint(mouse_x, mouse_y):
                         button_sound.play()
                         reset_game()
+                        game_saved = False
                         game_state = "playing"
+                    elif pause_save_btn.rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        saved_file = save_game()
+                        if saved_file:
+                            last_save_file = saved_file
+                        game_saved = True
+                        popup_active = True
+                        popup_message = "Jogo salvo com sucesso!"
+                        popup_type = "success"
+                        popup_start_time = current_time
                     elif pause_options_btn.rect.collidepoint(mouse_x, mouse_y):
                         button_sound.play()
                         options_from = "game"
                         game_state = "options"
                     elif pause_quit_btn.rect.collidepoint(mouse_x, mouse_y):
-                        running = False
+                        button_sound.play()
+                        if not game_saved:
+                            game_state = "save_confirmation"
+                        else:
+                            running = False
 
                 # --- Tela de opções ---
                 elif game_state == "options":
@@ -2144,6 +3150,100 @@ while running:
                     elif _bar.collidepoint(mouse_x, mouse_y):
                         sfx_volume = max(0.0, min(1.0, (mouse_x - _bar.x) / _bar.width))
                         _apply_sfx_volume(sfx_volume)
+
+                # --- Diálogo de confirmação de save ---
+                elif game_state == "save_confirmation":
+                    dialog_w, dialog_h = 400, 200
+                    dialog_x = SCREEN_WIDTH // 2 - dialog_w // 2
+                    dialog_y = SCREEN_HEIGHT // 2 - dialog_h // 2
+                    
+                    btn_save_rect = pygame.Rect(dialog_x + 30, dialog_y + 120, 150, 50)
+                    btn_discard_rect = pygame.Rect(dialog_x + 220, dialog_y + 120, 150, 50)
+                    
+                    if btn_save_rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        # Ao sair, sobrescreve o último save ao invés de criar novo
+                        if last_save_file:
+                            save_game_to_file(last_save_file)
+                        else:
+                            saved_file = save_game()
+                            if saved_file:
+                                last_save_file = saved_file
+                        game_saved = True
+                        running = False
+                    elif btn_discard_rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        running = False
+
+                # --- Diálogo de confirmação de load ---
+                elif game_state == "load_confirmation":
+                    dialog_w, dialog_h = 420, 220
+                    dialog_x = SCREEN_WIDTH // 2 - dialog_w // 2
+                    dialog_y = SCREEN_HEIGHT // 2 - dialog_h // 2
+                    
+                    btn_load_rect = pygame.Rect(dialog_x + 30, dialog_y + 140, 160, 50)
+                    btn_new_rect = pygame.Rect(dialog_x + 230, dialog_y + 140, 160, 50)
+                    
+                    if btn_load_rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        # Carrega o arquivo mais recente
+                        saves = get_save_files()
+                        if saves:
+                            load_game(saves[0])  # O primeiro da lista é o mais recente (ordenado por data)
+                            last_save_file = saves[0]
+                        game_saved = False
+                        game_state = "playing"
+                    elif btn_new_rect.collidepoint(mouse_x, mouse_y):
+                        button_sound.play()
+                        game_saved = False
+                        game_state = "playing"
+
+                # --- Seleção de save ---
+                elif game_state == "select_save":
+                    saves = get_save_files()
+                    if not saves:
+                        btn_back = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 100, 200, 50)
+                        if btn_back.collidepoint(mouse_x, mouse_y):
+                            button_sound.play()
+                            game_state = "start_screen"
+                    else:
+                        # Botões de ação
+                        btn_load = pygame.Rect(SCREEN_WIDTH // 2 - 350, SCREEN_HEIGHT - 90, 150, 50)
+                        btn_delete = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 90, 150, 50)
+                        btn_new = pygame.Rect(SCREEN_WIDTH // 2 + 150, SCREEN_HEIGHT - 90, 150, 50)
+                        
+                        if btn_load.collidepoint(mouse_x, mouse_y):
+                            button_sound.play()
+                            if selected_save_index < len(saves):
+                                load_game(saves[selected_save_index])
+                                last_save_file = saves[selected_save_index]
+                                game_state = "playing"
+                        elif btn_delete.collidepoint(mouse_x, mouse_y):
+                            button_sound.play()
+                            if selected_save_index < len(saves):
+                                save_to_delete = os.path.join(SAVES_DIR, saves[selected_save_index])
+                                try:
+                                    os.remove(save_to_delete)
+                                    print(f"[OK] Save deletado: {saves[selected_save_index]}")
+                                    selected_save_index = max(0, selected_save_index - 1)
+                                except:
+                                    print("[ERRO] Erro ao deletar save")
+                        elif btn_new.collidepoint(mouse_x, mouse_y):
+                            button_sound.play()
+                            game_state = "playing"
+                        
+                        # Scroll com mouse
+                        scroll_area_y = 120
+                        scroll_area_h = SCREEN_HEIGHT - 250
+                        item_height = 80
+                        
+                        # Navegação com clique nos saves
+                        for i, save_file in enumerate(saves):
+                            y = scroll_area_y + i * item_height - save_scroll_offset
+                            if scroll_area_y <= y < scroll_area_y + scroll_area_h:
+                                item_rect = pygame.Rect(50, y, SCREEN_WIDTH - 100, item_height - 10)
+                                if item_rect.collidepoint(mouse_x, mouse_y):
+                                    selected_save_index = i
 
                 # --- Jogo ---
                 elif game_state == "playing":
@@ -2262,6 +3362,7 @@ while running:
                                 else:
                                     popup_active = True
                                     popup_message = f"Limite de cortes atingido! ({upgrades.simultaneous_cuts_level}/{upgrades.simultaneous_cuts_level})"
+                                    popup_type = "warning"
                                     popup_start_time = pygame.time.get_ticks()
                                     button_sound.play()
                             elif current_mode == "mine":
@@ -2284,7 +3385,17 @@ while running:
                     last_camera_x = target_camera_x
                     last_camera_y = target_camera_y
 
+            # Inicia drag do painel do bot (botão esquerdo no header)
+            if event.button == 1 and show_bot_panel and game_state == "playing":
+                _hdr = pygame.Rect(bot_panel_x, bot_panel_y, 230, 32)
+                _cls = pygame.Rect(bot_panel_x + 230 - 31, bot_panel_y + 6, 18, 18)
+                if _hdr.collidepoint(mouse_x, mouse_y) and not _cls.collidepoint(mouse_x, mouse_y):
+                    bot_panel_dragging = True
+                    bot_panel_drag_offset = (mouse_x - bot_panel_x, mouse_y - bot_panel_y)
+
         if event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 1:
+                bot_panel_dragging = False
             if game_state == "playing":
                 if event.button == 3:
                     dragging = False
@@ -2300,7 +3411,10 @@ while running:
                     preview_active = False
 
         if event.type == pygame.MOUSEMOTION:
-            if game_state == "options" and pygame.mouse.get_pressed()[0]:
+            if bot_panel_dragging:
+                bot_panel_x = mouse_x - bot_panel_drag_offset[0]
+                bot_panel_y = mouse_y - bot_panel_drag_offset[1]
+            elif game_state == "options" and pygame.mouse.get_pressed()[0]:
                 _bar = pygame.Rect(SCREEN_WIDTH // 2 - 220, SCREEN_HEIGHT // 2 - 85, 440, 24)
                 if _bar.collidepoint(mouse_x, mouse_y):
                     sfx_volume = max(0.0, min(1.0, (mouse_x - _bar.x) / _bar.width))
@@ -2322,6 +3436,8 @@ while running:
         draw_start_screen()
     elif game_state == "options":
         draw_options_screen()
+    elif game_state == "select_save":
+        draw_select_save_screen()
     else:  # playing or paused
         menu_btn.active = (current_mode == "menu")
         hammer_btn.active = (current_mode == "demolish")
@@ -2342,7 +3458,7 @@ while running:
 
         # Painel do bot
         if show_bot_panel:
-            _close_rect = draw_bot_panel()
+            _header_rect, _close_rect = draw_bot_panel()
             # clique no X dentro do painel fecha
             if pygame.mouse.get_pressed()[0] and _close_rect.collidepoint(mouse_x, mouse_y):
                 show_bot_panel = False
@@ -2352,17 +3468,38 @@ while running:
         elif current_mode == "upgrade":
             draw_upgrade_menu()
 
+        # ===== VISUAL DE ATAQUE DO BOT =====
+        # if bot_attacking and bot_last_attacked_building is not None:
+        #     elapsed = current_time - bot_attack_animation_time
+        #     if elapsed < BOT_ATTACK_VISUAL_DURATION:
+        #         bx, by = bot_last_attacked_building
+        #         screen_x, screen_y = world_to_screen(bx * BASE_CELL_SIZE + BASE_CELL_SIZE/2, 
+        #                                               by * BASE_CELL_SIZE + BASE_CELL_SIZE/2)
+        #         
+        #         # Desenha o bot atacando com animação pulsante
+        #         alpha = int(255 * (1 - elapsed / BOT_ATTACK_VISUAL_DURATION))
+        #         bot_image.set_alpha(alpha)
+        #         screen.blit(bot_image, (int(screen_x - 40), int(screen_y - 40)))
+        #         
+        #         # Notificação de ataque
+        #         attack_text = font_medium.render("🤖 BOT ATACANDO!", True, (255, 50, 50))
+        #         screen.blit(attack_text, (SCREEN_WIDTH // 2 - 100, 50))
+
         if show_fps:
             draw_fps(screen, clock)
 
         if 'popup_active' in locals() and popup_active:
             if current_time - popup_start_time < 2000:
-                draw_popup(screen, popup_message)
+                draw_popup(screen, popup_message, popup_type=popup_type)
             else:
                 popup_active = False
 
         if game_state == "paused":
             draw_pause_menu()
+        elif game_state == "save_confirmation":
+            draw_save_confirmation_dialog()
+        elif game_state == "load_confirmation":
+            draw_load_confirmation_dialog()
         else:
             draw_custom_cursor(screen, mouse_x, mouse_y)
 
